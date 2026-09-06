@@ -1,0 +1,8 @@
+[package]
+name = "factory"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+trillium = "1.4.0"
+trillium-tokio = "0.6.4"
