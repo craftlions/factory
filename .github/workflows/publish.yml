@@ -62,8 +62,8 @@ jobs:
           install -m 0644 packaging/craftlions-factory.service \
             "$PKGROOT/usr/lib/systemd/system/craftlions-factory.service"
 
-          install -m 0755 packaging/craftlions-factory.postinst "$PKGROOT/DEBIAN/postinst"
-          install -m 0755 packaging/craftlions-factory.prerm "$PKGROOT/DEBIAN/prerm"
+          install -m 0755 packaging/postinst "$PKGROOT/DEBIAN/postinst"
+          install -m 0755 packaging/prerm "$PKGROOT/DEBIAN/prerm"
 
           cat > "$PKGROOT/DEBIAN/control" <<CONTROL
           Package: craftlions-factory
