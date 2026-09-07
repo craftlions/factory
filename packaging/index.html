@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="description" content="Install and update craftlions Factory using the signed APT repository for Debian amd64.">
+    <title>craftlions Factory — APT repository</title>
+    <style>
+      :root { color-scheme: light dark; font-family: system-ui, sans-serif; line-height: 1.6; }
+      body { max-width: 760px; margin: 0 auto; padding: 48px 24px; }
+      h1 { font-size: clamp(2rem, 6vw, 3rem); line-height: 1.15; margin-bottom: 16px; }
+      h2 { margin-top: 36px; font-size: 1.25rem; }
+      a { color: light-dark(#145dcc, #91baff); text-underline-offset: 3px; }
+      pre { padding: 20px; overflow-x: auto; border: 1px solid light-dark(#d5d9df, #444b55); border-radius: 8px; background: light-dark(#f5f7fa, #1b2028); }
+      code { font-family: ui-monospace, monospace; font-size: 0.9em; }
+      pre:focus-visible { outline: 2px solid currentColor; outline-offset: 3px; }
+      footer { margin-top: 40px; border-top: 1px solid light-dark(#d5d9df, #444b55); padding-top: 20px; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>craftlions Factory</h1>
+      <p>Signed APT repository for the Factory appliance. Install once, then receive updates through APT.</p>
+      <p><strong>Target:</strong> Debian with systemd · amd64 · stable</p>
+
+      <h2>1. Add the repository</h2>
+      <p>Run these commands on your device. You will need <code>curl</code> and administrator access.</p>
+      <pre tabindex="0" aria-label="Add the APT repository commands"><code>sudo install -d -m 0755 /etc/apt/keyrings
+sudo curl -fsSL \
+  https://craftlions.github.io/factory/craftlions-factory-archive-keyring.asc \
+  -o /etc/apt/keyrings/craftlions-factory-archive-keyring.asc
+sudo chmod 0644 /etc/apt/keyrings/craftlions-factory-archive-keyring.asc
+
+sudo tee /etc/apt/sources.list.d/craftlions-factory.sources &gt;/dev/null &lt;&lt;'EOF'
+Types: deb
+URIs: https://craftlions.github.io/factory/
+Suites: stable
+Components: main
+Architectures: amd64
+Signed-By: /etc/apt/keyrings/craftlions-factory-archive-keyring.asc
+EOF</code></pre>
+
+      <h2>2. Install Factory</h2>
+      <pre tabindex="0" aria-label="Install Factory commands"><code>sudo apt update
+sudo apt install craftlions-factory</code></pre>
+      <p>Open <code>http://DEVICE_IP:8080/</code> in your browser, replacing <code>DEVICE_IP</code> with your device’s IP address.</p>
+
+      <h2>3. Update Factory</h2>
+      <pre tabindex="0" aria-label="Update Factory commands"><code>sudo apt update
+sudo apt install --only-upgrade craftlions-factory</code></pre>
+      <p>The Factory service restarts automatically after an upgrade.</p>
+    </main>
+    <footer>
+      <a href="craftlions-factory-archive-keyring.asc">Public signing key</a> ·
+      <a href="dists/stable/InRelease">Signed release metadata</a> ·
+      <a href="dists/stable/main/binary-amd64/Packages">Package index</a> ·
+      <a href="https://github.com/craftlions/factory">Source code</a>
+    </footer>
+  </body>
+</html>

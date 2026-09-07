@@ -124,6 +124,7 @@ jobs:
           mkdir -p "$SITE/pool/main/c/craftlions-factory"
           mkdir -p "$SITE/dists/stable/main/binary-amd64"
 
+          install -m 0644 packaging/index.html "$SITE/index.html"
           cp "$DEB" "$SITE/pool/main/c/craftlions-factory/"
 
           cd "$SITE"
