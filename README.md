@@ -68,7 +68,7 @@ sudo apt update
 sudo apt install craftlions-factory
 ```
 
-Visit `http://DEVICE_IP:8080/`.
+Visit `http://DEVICE_IP/` (port 80).
 
 ## 5. Upgrade
 
@@ -86,7 +86,7 @@ sudo apt update
 sudo apt upgrade
 ```
 
-APT upgrades `appliance` and the package's `postinst` restarts `appliance.service`.
+APT upgrades `craftlions-factory` and the package's `postinst` restarts `craftlions-factory.service`.
 
 ## Notes
 
