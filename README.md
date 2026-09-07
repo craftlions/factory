@@ -14,7 +14,9 @@ mise run dev
 
 Open `http://127.0.0.1:5173` (Vite's default port). Vite refreshes the UI on edits
 and proxies `/api` to Rust on port 8081. Use port 5173 for both the UI and API
-during development. Restart `dev:server` after Rust edits.
+during development. `mise watch`, powered by watchexec, rebuilds and restarts
+Rust when `src/`, `Cargo.toml`, or `Cargo.lock` changes. Frontend edits do not
+restart Rust. `mise run server` starts Rust once without watching.
 The page checks `/api/health` when it loads.
 
 Node and Aube are pinned in `mise.toml`; frontend dependency versions are pinned

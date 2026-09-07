@@ -2,6 +2,7 @@
 rust = "latest"
 zig = "latest"
 node = "26.8.1"
+watchexec = "2.7.2"
 # Aube moved from jdx/aube; use the current release/attestation identity.
 "github:aubepkg/aube" = "2.2.12"
 
@@ -18,6 +19,10 @@ dir = "ui"
 run = "aube run dev"
 
 [tasks."dev:server"]
+run = "mise watch --restart server"
+
+[tasks.server]
+sources = ["src/**/*", "Cargo.toml", "Cargo.lock"]
 env = { FACTORY_HOST = "127.0.0.1", FACTORY_PORT = "8081", FACTORY_UI_DIR = "ui/dist" }
 run = "cargo run"
 
