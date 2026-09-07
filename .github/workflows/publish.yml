@@ -140,6 +140,13 @@ jobs:
           curl --fail http://localhost/api/health | python3 -c 'import json, sys; assert json.load(sys.stdin) == {"status": "ok"}'
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost/api/missing)" = 404
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost/assets/missing.js)" = 404
+          curl --fail http://localhost/api/overview | python3 -c 'import json, sys; o = json.load(sys.stdin); assert o["sessions"]["running"] == 1, o'
+          curl --fail http://localhost/api/sessions | python3 -c 'import json, sys; s = json.load(sys.stdin); assert s[0]["kind"] == "service" and s[0]["status"] == "running", s'
+          sleep 7
+          curl --fail 'http://localhost/api/samples?window=60' | python3 -c 'import json, sys; s = json.load(sys.stdin); assert len(s) >= 1 and s[-1]["mem_total"] > 0, s'
+          curl --fail --max-time 12 -H 'accept: text/event-stream' http://localhost/api/events | grep -m1 '^event: sample'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost/api/events)" = 406
+          test -s /var/lib/craftlions-factory/factory.db
 
       - name: Build and sign APT repository
         env:

@@ -9,6 +9,8 @@ User=craftlions-factory
 Group=craftlions-factory
 
 ExecStart=/usr/bin/craftlions-factory
+StateDirectory=craftlions-factory
+StateDirectoryMode=0750
 Restart=always
 RestartSec=2
 

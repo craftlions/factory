@@ -22,8 +22,8 @@ run = "aube run dev"
 run = "mise watch --restart server"
 
 [tasks.server]
-sources = ["src/**/*", "Cargo.toml", "Cargo.lock"]
-env = { FACTORY_HOST = "127.0.0.1", FACTORY_PORT = "8081", FACTORY_UI_DIR = "ui/dist" }
+sources = ["src/**/*", "migrations/**/*", "Cargo.toml", "Cargo.lock"]
+env = { FACTORY_HOST = "127.0.0.1", FACTORY_PORT = "8081", FACTORY_UI_DIR = "ui/dist", FACTORY_DATA_DIR = "data" }
 run = "cargo run"
 
 [tasks.dev]

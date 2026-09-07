@@ -17,7 +17,9 @@ and proxies `/api` to Rust on port 8081. Use port 5173 for both the UI and API
 during development. `mise watch`, powered by watchexec, rebuilds and restarts
 Rust when `src/`, `Cargo.toml`, or `Cargo.lock` changes. Frontend edits do not
 restart Rust. `mise run server` starts Rust once without watching.
-The page checks `/api/health` when it loads.
+The dashboard loads `/api/overview`, `/api/samples`, and `/api/sessions`, then
+subscribes to `/api/events` (server-sent events) for a new sample every five
+seconds.
 
 Node and Aube are pinned in `mise.toml`; frontend dependency versions are pinned
 in `ui/package.json` and `ui/aube-lock.yaml`. Aube uses its current upstream
@@ -35,11 +37,34 @@ UI at `http://127.0.0.1:8080` directly from Rust.
 Trillium serves assets and falls back to the UI for extensionless HTML navigation;
 unknown API routes and missing assets return 404.
 
-On Debian, the single systemd service serves port 80 and reads UI files from
-`/usr/share/craftlions-factory/ui`. `FACTORY_HOST`, `FACTORY_PORT`, and
-`FACTORY_UI_DIR` override those defaults. Node and Aube are build tools only;
+On Debian, the single systemd service serves port 80, reads UI files from
+`/usr/share/craftlions-factory/ui`, and keeps its SQLite database in
+`/var/lib/craftlions-factory` (a systemd `StateDirectory`). `FACTORY_HOST`,
+`FACTORY_PORT`, `FACTORY_UI_DIR`, and `FACTORY_DATA_DIR` override those
+defaults; the dev tasks use `./data`, which is gitignored. Node and Aube are build tools only;
 the appliance does not need a JavaScript server. CI builds both parts, installs
 the package, and checks its HTTP endpoints before publishing.
+
+## Dashboard
+
+Rust samples the host every five seconds with `sysinfo`: CPU, one-minute load,
+memory, the disk holding the data directory, the service's own CPU and resident
+memory, and the number and size of files in the data directory. Samples are
+stored in SQLite through `sqlx` with embedded migrations from `migrations/` and
+pruned after seven days.
+
+Sessions are the unit of work. For now the only session kind is `service`: one
+row per run of the process, closed as `completed` on clean shutdown. Any
+session still open at startup is marked `interrupted`. Microvm reporting over
+vsock is listed as a planned source and not implemented.
+
+| Endpoint | Purpose |
+| --- | --- |
+| `GET /api/health` | Liveness, `{"status":"ok"}` |
+| `GET /api/overview` | Host facts, latest sample, session counts, sources |
+| `GET /api/samples?window=SECONDS` | Samples from the last window, default one hour |
+| `GET /api/sessions` | Fifty most recent sessions |
+| `GET /api/events` | SSE stream, `sample` events; other `Accept` values get 406 |
 
 ## 1. Generate a dedicated APT signing key
 
