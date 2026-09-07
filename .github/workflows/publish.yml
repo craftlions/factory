@@ -25,6 +25,42 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
+      - name: Validate APT signing credentials
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+          APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "$APT_SIGNING_KEY" ]]; then
+            echo "::error::APT_SIGNING_KEY is empty or unavailable. Add it as an Actions secret for this repository."
+            exit 1
+          fi
+          if [[ "$APT_SIGNING_KEY" != *"-----BEGIN PGP PRIVATE KEY BLOCK-----"* ]]; then
+            echo "::error::APT_SIGNING_KEY must contain the complete ASCII-armored private key, not a filename, public key, or base64 value. Upload with: gh secret set APT_SIGNING_KEY < apt-signing-private.asc"
+            exit 1
+          fi
+
+          export GNUPGHOME
+          GNUPGHOME="$(mktemp -d "$RUNNER_TEMP/apt-gnupg.XXXXXX")"
+          echo "GNUPGHOME=$GNUPGHOME" >> "$GITHUB_ENV"
+          if ! printf '%s' "$APT_SIGNING_KEY" | gpg --batch --import; then
+            echo "::error::Cannot import APT_SIGNING_KEY. Re-export the private key and upload the file directly; see README.md."
+            exit 1
+          fi
+          KEY_ID="$(gpg --batch --list-secret-keys --with-colons | awk -F: '$1 == "fpr" && !key {key=$10} END {print key}')"
+          if [[ -z "$KEY_ID" ]]; then
+            echo "::error::APT_SIGNING_KEY contains no private key. Export it with gpg --armor --export-secret-keys."
+            exit 1
+          fi
+          if ! printf 'APT signing check\n' | gpg --batch --yes --pinentry-mode loopback \
+            --passphrase-fd 3 3<<< "$APT_GPG_PASSPHRASE" \
+            --local-user "$KEY_ID" --detach-sign --output /dev/null; then
+            echo "::error::The key cannot sign. Check APT_GPG_PASSPHRASE and that the key is valid and supports signing."
+            exit 1
+          fi
+          echo "KEY_ID=$KEY_ID" >> "$GITHUB_ENV"
+
       - name: Install Rust
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
@@ -79,15 +115,6 @@ jobs:
           dpkg-deb --build --root-owner-group "$PKGROOT" "$DEB"
           echo "DEB=$DEB" >> "$GITHUB_ENV"
 
-      - name: Import APT signing key
-        env:
-          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
-        run: |
-          printf '%s' "$APT_SIGNING_KEY" | gpg --batch --import
-          KEY_ID="$(gpg --batch --list-secret-keys --with-colons | awk -F: '$1 == "sec" {print $5; exit}')"
-          test -n "$KEY_ID"
-          echo "KEY_ID=$KEY_ID" >> "$GITHUB_ENV"
-
       - name: Build and sign APT repository
         env:
           APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
@@ -115,14 +142,14 @@ jobs:
             release dists/stable > dists/stable/Release
 
           gpg --batch --yes --pinentry-mode loopback \
-            --passphrase "$APT_GPG_PASSPHRASE" \
+            --passphrase-fd 3 3<<< "$APT_GPG_PASSPHRASE" \
             --local-user "$KEY_ID" \
             --clearsign \
             --output dists/stable/InRelease \
             dists/stable/Release
 
           gpg --batch --yes --pinentry-mode loopback \
-            --passphrase "$APT_GPG_PASSPHRASE" \
+            --passphrase-fd 3 3<<< "$APT_GPG_PASSPHRASE" \
             --local-user "$KEY_ID" \
             --armor --detach-sign \
             --output dists/stable/Release.gpg \

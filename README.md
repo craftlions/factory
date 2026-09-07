@@ -7,16 +7,28 @@ This repo builds a statically linked Rust/Trillium appliance, packages it as a `
 On your development machine:
 
 ```bash
-gpg --quick-generate-key "craftlions Factory APT <alexander@craftlions.com>" rsa4096 sign 2y
-gpg --armor --export-secret-keys "craftlions Factory APT <alexander@craftlions.com>" > apt-signing-private.asc
+gpg --quick-generate-key "craftlions Factory APT 2026 <alexander@craftlions.com>" rsa4096 sign 2y
+gpg --armor --export-secret-keys "craftlions Factory APT 2026 <alexander@craftlions.com>" > apt-signing-private.asc
 ```
 
-Add these GitHub Actions repository secrets:
+If you already generated this key, reuse it and run only the export command.
+The exported file must be nonempty and start with `-----BEGIN PGP PRIVATE KEY BLOCK-----`.
 
-- `APT_SIGNING_KEY`: the complete contents of `apt-signing-private.asc`
-- `APT_GPG_PASSPHRASE`: the key passphrase
+From this repository, upload the file directly using the [GitHub CLI](https://cli.github.com/manual/gh_secret_set):
 
-Do not commit the private key.
+```bash
+test -s apt-signing-private.asc && gh secret set APT_SIGNING_KEY < apt-signing-private.asc
+gh secret set APT_GPG_PASSPHRASE
+```
+
+The second command prompts for the key passphrase. These are GitHub Actions
+repository **secrets**, not variables. Do not paste the filename or base64-encode
+the key. If the `github-pages` environment also has these secrets, remove stale
+overrides or update them with `gh secret set --env github-pages ...`.
+
+Do not commit the private key. The workflow checks the key and passphrase before
+building. `no valid OpenPGP data found` means the import received empty or invalid
+key data; changing the passphrase will not fix that import error.
 
 ## 2. Enable GitHub Pages
 
