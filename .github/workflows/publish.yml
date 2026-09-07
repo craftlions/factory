@@ -2,6 +2,8 @@ name: Publish APT repository
 
 on:
   push:
+    tags:
+      - 'v*'
 
 permissions:
   contents: read
