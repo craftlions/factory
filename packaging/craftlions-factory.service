@@ -1,0 +1,20 @@
+[Unit]
+Description=craftlions Factory Web UI
+After=network.target
+
+[Service]
+Type=simple
+
+User=craftlions-factory
+Group=craftlions-factory
+
+ExecStart=/usr/bin/craftlions-factory
+Restart=always
+RestartSec=2
+
+AmbientCapabilities=CAP_NET_BIND_SERVICE
+CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

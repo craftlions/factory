@@ -1,0 +1,17 @@
+#!/bin/sh
+set -e
+
+if ! getent passwd appliance >/dev/null; then
+    useradd \
+        --system \
+        --no-create-home \
+        --shell /usr/sbin/nologin \
+        --user-group \
+        craftlions-factory
+fi
+
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload
+    systemctl enable craftlions-factory.service >/dev/null
+    systemctl restart craftlions-factory.service
+fi

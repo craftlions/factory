@@ -1,0 +1,144 @@
+name: Publish APT repository
+
+on:
+  push:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools apt-utils gnupg
+
+      - name: Get version
+        id: version
+        shell: bash
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Build Rust binary
+        run: cargo build --release --target x86_64-unknown-linux-musl
+
+      - name: Build .deb
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -eux
+          PKGROOT="$RUNNER_TEMP/pkg"
+          DEB="craftlions-factory_${VERSION}_amd64.deb"
+
+          mkdir -p "$PKGROOT/DEBIAN"
+          mkdir -p "$PKGROOT/usr/bin"
+          mkdir -p "$PKGROOT/usr/lib/systemd/system"
+
+          install -m 0755 \
+            target/x86_64-unknown-linux-musl/release/craftlions-factory \
+            "$PKGROOT/usr/bin/craftlions-factory"
+
+          install -m 0644 packaging/craftlions-factory.service \
+            "$PKGROOT/usr/lib/systemd/system/craftlions-factory.service"
+
+          install -m 0755 packaging/craftlions-factory.postinst "$PKGROOT/DEBIAN/postinst"
+          install -m 0755 packaging/craftlions-factory.prerm "$PKGROOT/DEBIAN/prerm"
+
+          cat > "$PKGROOT/DEBIAN/control" <<CONTROL
+          Package: craftlions-factory
+          Version: $VERSION
+          Section: misc
+          Priority: optional
+          Architecture: amd64
+          Maintainer: craftlions <alexander@craftlions.com>
+          Depends: systemd
+          Description: craftlions Factory
+          CONTROL
+
+          dpkg-deb --build --root-owner-group "$PKGROOT" "$DEB"
+          echo "DEB=$DEB" >> "$GITHUB_ENV"
+
+      - name: Import APT signing key
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+        run: |
+          printf '%s' "$APT_SIGNING_KEY" | gpg --batch --import
+          KEY_ID="$(gpg --batch --list-secret-keys --with-colons | awk -F: '$1 == "sec" {print $5; exit}')"
+          test -n "$KEY_ID"
+          echo "KEY_ID=$KEY_ID" >> "$GITHUB_ENV"
+
+      - name: Build and sign APT repository
+        env:
+          APT_GPG_PASSPHRASE: ${{ secrets.APT_GPG_PASSPHRASE }}
+        run: |
+          set -eu
+          SITE="$RUNNER_TEMP/site"
+          mkdir -p "$SITE/pool/main/c/craftlions-factory"
+          mkdir -p "$SITE/dists/stable/main/binary-amd64"
+
+          cp "$DEB" "$SITE/pool/main/c/craftlions-factory/"
+
+          cd "$SITE"
+          apt-ftparchive packages pool/main/c/craftlions-factory \
+            > dists/stable/main/binary-amd64/Packages
+          gzip -9cn dists/stable/main/binary-amd64/Packages \
+            > dists/stable/main/binary-amd64/Packages.gz
+
+          apt-ftparchive \
+            -o APT::FTPArchive::Release::Origin="craftlions Factory" \
+            -o APT::FTPArchive::Release::Label="craftlions Factory" \
+            -o APT::FTPArchive::Release::Suite="stable" \
+            -o APT::FTPArchive::Release::Codename="stable" \
+            -o APT::FTPArchive::Release::Architectures="amd64" \
+            -o APT::FTPArchive::Release::Components="main" \
+            release dists/stable > dists/stable/Release
+
+          gpg --batch --yes --pinentry-mode loopback \
+            --passphrase "$APT_GPG_PASSPHRASE" \
+            --local-user "$KEY_ID" \
+            --clearsign \
+            --output dists/stable/InRelease \
+            dists/stable/Release
+
+          gpg --batch --yes --pinentry-mode loopback \
+            --passphrase "$APT_GPG_PASSPHRASE" \
+            --local-user "$KEY_ID" \
+            --armor --detach-sign \
+            --output dists/stable/Release.gpg \
+            dists/stable/Release
+
+          gpg --batch --export-options export-minimal --armor \
+            --export "$KEY_ID" > craftlions-factory-archive-keyring.asc
+
+          touch .nojekyll
+
+      - name: Configure Pages
+        uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d
+
+      - name: Upload APT repository
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9
+        with:
+          path: ${{ runner.temp }}/site
+
+      - name: Deploy GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346
