@@ -1,3 +1,32 @@
 [tools]
 rust = "latest"
 zig = "latest"
+node = "26.8.1"
+# Aube moved from jdx/aube; use the current release/attestation identity.
+"github:aubepkg/aube" = "2.2.12"
+
+[tasks."ui:install"]
+dir = "ui"
+run = "aube ci"
+
+[tasks."ui:build"]
+dir = "ui"
+run = "aube run build"
+
+[tasks."dev:ui"]
+dir = "ui"
+run = "aube run dev"
+
+[tasks."dev:server"]
+env = { FACTORY_HOST = "127.0.0.1", FACTORY_PORT = "8081", FACTORY_UI_DIR = "ui/dist" }
+run = "cargo run"
+
+[tasks.dev]
+depends = ["dev:server", "dev:ui"]
+
+[tasks.build]
+depends = ["ui:build"]
+run = "cargo build --release --locked"
+
+[tasks.check]
+run = ["cargo fmt --check", "cargo clippy --locked -- -D warnings", "cd ui && aube run check"]

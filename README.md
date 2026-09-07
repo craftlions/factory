@@ -1,6 +1,43 @@
-# Minimal Rust appliance with an APT repository on GitHub Pages
+# Rust appliance with a React UI and an APT repository
 
-This repo builds a statically linked Rust/Trillium appliance, packages it as a `.deb`, creates signed APT metadata, and deploys the repository to GitHub Pages whenever a `v*` tag is pushed.
+This repo builds a statically linked Rust/Trillium appliance and a Vite/React/TypeScript UI, packages them as a `.deb`, creates signed APT metadata, and deploys the repository to GitHub Pages whenever a `v*` tag is pushed.
+
+## Development
+
+Install [mise](https://mise.jdx.dev/), then run:
+
+```bash
+mise install
+mise run ui:install
+mise run dev
+```
+
+Open `http://127.0.0.1:5173` (Vite's default port). Vite refreshes the UI on edits
+and proxies `/api` to Rust on port 8081. Use port 5173 for both the UI and API
+during development. Restart `dev:server` after Rust edits.
+The page checks `/api/health` when it loads.
+
+Node and Aube are pinned in `mise.toml`; frontend dependency versions are pinned
+in `ui/package.json` and `ui/aube-lock.yaml`. Aube uses its current upstream
+`aubepkg/aube` repository explicitly because older mise registry entries still
+reference its previous release identity.
+
+```bash
+mise run check
+mise run build
+FACTORY_HOST=127.0.0.1 FACTORY_PORT=8080 FACTORY_UI_DIR=ui/dist ./target/release/craftlions-factory
+```
+
+Stop `mise run dev` before running the last command, which serves the production
+UI at `http://127.0.0.1:8080` directly from Rust.
+Trillium serves assets and falls back to the UI for extensionless HTML navigation;
+unknown API routes and missing assets return 404.
+
+On Debian, the single systemd service serves port 80 and reads UI files from
+`/usr/share/craftlions-factory/ui`. `FACTORY_HOST`, `FACTORY_PORT`, and
+`FACTORY_UI_DIR` override those defaults. Node and Aube are build tools only;
+the appliance does not need a JavaScript server. CI builds both parts, installs
+the package, and checks its HTTP endpoints before publishing.
 
 ## 1. Generate a dedicated APT signing key
 

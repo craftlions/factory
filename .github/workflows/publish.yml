@@ -76,8 +76,18 @@ jobs:
         shell: bash
         run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
 
+      - name: Install frontend tools
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v3
+        with:
+          install_args: node github:aubepkg/aube
+
+      - name: Build frontend
+        run: |
+          mise run ui:install
+          mise run ui:build
+
       - name: Build Rust binary
-        run: cargo build --release --target x86_64-unknown-linux-musl
+        run: cargo build --locked --release --target x86_64-unknown-linux-musl
 
       - name: Build .deb
         env:
@@ -90,6 +100,9 @@ jobs:
           mkdir -p "$PKGROOT/DEBIAN"
           mkdir -p "$PKGROOT/usr/bin"
           mkdir -p "$PKGROOT/usr/lib/systemd/system"
+          mkdir -p "$PKGROOT/usr/share/craftlions-factory/ui"
+
+          cp -R ui/dist/. "$PKGROOT/usr/share/craftlions-factory/ui/"
 
           install -m 0755 \
             target/x86_64-unknown-linux-musl/release/craftlions-factory \
@@ -114,6 +127,15 @@ jobs:
 
           dpkg-deb --build --root-owner-group "$PKGROOT" "$DEB"
           echo "DEB=$DEB" >> "$GITHUB_ENV"
+
+      - name: Smoke test installed package
+        run: |
+          sudo dpkg -i "$DEB"
+          curl --fail --retry 10 --retry-connrefused --retry-delay 1 http://localhost/ > /tmp/factory-index.html
+          grep -q 'id="root"' /tmp/factory-index.html
+          curl --fail http://localhost/api/health | python3 -c 'import json, sys; assert json.load(sys.stdin) == {"status": "ok"}'
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost/api/missing)" = 404
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost/assets/missing.js)" = 404
 
       - name: Build and sign APT repository
         env:

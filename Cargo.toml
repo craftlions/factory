@@ -5,4 +5,5 @@ edition = "2024"
 
 [dependencies]
 trillium = "1.4.0"
+trillium-static = { version = "0.6.1", features = ["tokio"] }
 trillium-tokio = "0.6.4"

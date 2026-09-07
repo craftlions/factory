@@ -1,3 +1,5 @@
 /target
 
 /apt-signing-private.asc
+/ui/node_modules/
+/ui/dist/
