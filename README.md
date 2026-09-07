@@ -101,9 +101,12 @@ Repository Settings -> Pages -> Build and deployment -> Source -> GitHub Actions
 ## 3. Publish version 0.1.0
 
 ```bash
-git tag v0.1.0
-git push origin v0.1.0
+mise run release 0.1.0
 ```
+
+This sets the version in `Cargo.toml`, `Cargo.lock`, and `ui/package.json`,
+commits `release v0.1.0`, tags it, and pushes. The workflow refuses tags whose
+version differs from `Cargo.toml`.
 
 The APT repository will be available at:
 
@@ -136,11 +139,10 @@ Visit `http://DEVICE_IP/` (port 80).
 
 ## 5. Upgrade
 
-Publish another tag:
+Publish another version:
 
 ```bash
-git tag v0.1.1
-git push origin v0.1.1
+mise run release 0.1.1
 ```
 
 Then on the appliance:
