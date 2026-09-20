@@ -120,9 +120,7 @@ tr:last-child td { border-bottom: none; }
   border: 1px solid currentColor;
 }
 .badge.running, .badge.active { color: var(--ok); }
-.badge.completed { color: var(--muted); }
-.badge.interrupted { color: var(--warn); }
-.badge.planned { color: var(--muted); }
+.badge.completed, .badge.interrupted { color: var(--warn); }
 
 .sources {
   list-style: none;
