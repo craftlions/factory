@@ -19,10 +19,11 @@ dir = "ui"
 run = "aube run dev"
 
 [tasks."dev:server"]
-run = "mise watch --restart server"
+# Watch paths live here, not as `sources` on `server`: mise skips a task whose
+# sources are unchanged, which would leave the long-running server unstarted.
+run = "mise watch --restart -w src -w migrations -w Cargo.toml -w Cargo.lock server"
 
 [tasks.server]
-sources = ["src/**/*", "migrations/**/*", "Cargo.toml", "Cargo.lock"]
 env = { FACTORY_HOST = "127.0.0.1", FACTORY_PORT = "8081", FACTORY_UI_DIR = "ui/dist", FACTORY_DATA_DIR = "data" }
 run = "cargo run"
 
