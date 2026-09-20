@@ -212,7 +212,7 @@ export function SessionPage({ id }: { id: string }) {
         }}>
         {items.length === 0 && !streaming && (
           <p className="empty">
-            {running ? `${harness?.name ?? 'The harness'} is ready in an empty directory. Say what it should do.` : 'This session has no messages.'}
+            {running ? `${harness?.name ?? 'The harness'} starts in its own microvm. Setup progress appears here, and you can already say what it should do.` : 'This session has no messages.'}
           </p>
         )}
         {items.map((item, i) => {

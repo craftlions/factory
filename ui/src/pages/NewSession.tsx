@@ -313,7 +313,7 @@ export function NewSessionPage() {
             {creating ? 'Starting…' : 'Create session'} <ArrowIcon />
           </button>
         </div>
-        {blocked && <p className="hint">{blocked} Sessions can be created once an isolated runner exists.</p>}
+        {blocked && <p className="hint">{blocked} So far only Pi in a microvm with an empty directory can be created.</p>}
         {createError && <p className="msg-error" role="alert">{createError}</p>}
       </div>
     );

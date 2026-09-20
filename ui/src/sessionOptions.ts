@@ -129,8 +129,10 @@ export function providerName(id: string): string {
 
 /** Why this draft cannot be created yet, or null when the factory can start it. */
 export function notCreatable(draft: SessionDraft): string | null {
-  // No isolated runner exists yet, so nothing can be created at the moment.
-  return `${draft.isolation ? ISOLATION[draft.isolation].name : 'This isolation level'} is not implemented yet.`;
+  if (draft.harness !== 'pi') return `The ${harnessOf(draft)?.name ?? 'chosen'} harness is not implemented yet.`;
+  if (draft.isolation !== 'harness') return `${draft.isolation ? ISOLATION[draft.isolation].name : 'This isolation level'} is not implemented yet.`;
+  if (draft.workdir.kind !== 'empty') return `The working directory kind “${WORKDIR[draft.workdir.kind].name}” is not implemented yet.`;
+  return null;
 }
 
 export function harnessOf(draft: SessionDraft): Harness | undefined {
@@ -179,7 +181,10 @@ export function buildPlan(draft: SessionDraft): string[] {
   const inVm = draft.isolation === 'harness';
   const steps: string[] = [];
 
-  if (inVm) steps.push('Boot a microvm for the session.');
+  if (inVm) {
+    steps.push('Boot a Firecracker microvm with its own disk and no network device.');
+    steps.push('Allow outbound connections only to the model’s API host and the hosts tool setup needs.');
+  }
   if (draft.isolation === 'backend') steps.push('Start an isolated backend for tool calls and the terminal.');
 
   const where = inVm ? 'inside the microvm' : 'inside the backend';
@@ -191,8 +196,10 @@ export function buildPlan(draft: SessionDraft): string[] {
     steps.push(`Create an empty working directory ${where}.`);
   }
 
+  if (inVm) steps.push('Install the harness with mise inside the microvm.');
   steps.push(`Launch ${harness.name} ${inVm ? 'inside the microvm' : 'on the host'}${inVm ? '' : ', with tools routed to the backend'}.`);
   steps.push(`Configure ${providerName(draft.provider)} model ${draft.model.trim()} with reasoning ${draft.reasoning}.`);
   steps.push('Record the session as running.');
+  if (inVm) steps.push('When it ends, copy the conversation and the workspace out of the session’s disk.');
   return steps;
 }
