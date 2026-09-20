@@ -1,6 +1,7 @@
 import { StrictMode, useEffect, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { HostPage } from './pages/Host';
+import { NewSessionPage } from './pages/NewSession';
 import { OverviewPage } from './pages/Overview';
 import { SessionsPage } from './pages/Sessions';
 import { Link, usePath } from './router';
@@ -14,9 +15,10 @@ const CONNECTION_LABEL: Record<Connection, string> = {
   unavailable: 'Unavailable',
 };
 
-const PAGES: { path: string; title: string; render: (dashboard: Dashboard) => ReactNode }[] = [
+const PAGES: { path: string; title: string; hidden?: boolean; render: (dashboard: Dashboard) => ReactNode }[] = [
   { path: '/', title: 'Overview', render: (d) => <OverviewPage overview={d.overview} /> },
   { path: '/sessions', title: 'Sessions', render: (d) => <SessionsPage sessions={d.sessions} samples={d.samples} /> },
+  { path: '/sessions/new', title: 'New session', hidden: true, render: () => <NewSessionPage /> },
   { path: '/host', title: 'Host', render: (d) => <HostPage overview={d.overview} samples={d.samples} /> },
 ];
 
@@ -36,8 +38,8 @@ function App() {
       <aside className="sidebar">
         <p className="brand">craftlions Factory</p>
         <nav aria-label="Main">
-          {PAGES.map((p) => (
-            <Link key={p.path} to={p.path} current={p.path === path}>{p.title}</Link>
+          {PAGES.filter((p) => !p.hidden).map((p) => (
+            <Link key={p.path} to={p.path} current={p.path === path || path.startsWith(`${p.path}/`)}>{p.title}</Link>
           ))}
         </nav>
         <p className="detail host">

@@ -19,7 +19,9 @@ export function navigate(to: string): void {
   window.scrollTo(0, 0);
 }
 
-export function Link({ to, current, children }: { to: string; current?: boolean; children: ReactNode }) {
+export function Link({ to, current, className, label, children }: {
+  to: string; current?: boolean; className?: string; label?: string; children: ReactNode;
+}) {
   function onClick(event: MouseEvent<HTMLAnchorElement>) {
     // Leave new-tab, new-window and download gestures to the browser.
     if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
@@ -27,6 +29,6 @@ export function Link({ to, current, children }: { to: string; current?: boolean;
     navigate(to);
   }
   return (
-    <a href={to} onClick={onClick} aria-current={current ? 'page' : undefined}>{children}</a>
+    <a href={to} onClick={onClick} className={className} aria-label={label} title={label} aria-current={current ? 'page' : undefined}>{children}</a>
   );
 }

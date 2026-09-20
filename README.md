@@ -101,6 +101,7 @@ narrow screens, and these pages routed with the History API in
 | --- | --- |
 | `/` | Overview: session counts |
 | `/sessions` | Fifty most recent sessions |
+| `/sessions/new` | Questionnaire that creates a session |
 | `/host` | Host, service, and data directory stats with one hour of history |
 
 | Endpoint | Purpose |
