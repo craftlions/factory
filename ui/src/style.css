@@ -178,7 +178,10 @@ tr:last-child td { border-bottom: none; }
   border: 1px solid currentColor;
 }
 .badge.running { color: var(--ok); }
-.badge.completed, .badge.interrupted { color: var(--warn); }
+.badge.completed { color: var(--muted); }
+.badge.interrupted { color: var(--warn); }
+.badge.failed { color: var(--bad); }
+td.note { max-width: 22rem; overflow: hidden; text-overflow: ellipsis; }
 
 @media (max-width: 48rem) {
   .shell { display: block; }

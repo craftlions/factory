@@ -8,6 +8,7 @@ export function OverviewPage({ overview }: Pick<Dashboard, 'overview'>) {
       <Tile title="Running sessions" value={counts?.running} />
       <Tile title="Completed sessions" value={counts?.completed} />
       <Tile title="Interrupted sessions" value={counts?.interrupted} />
+      <Tile title="Failed sessions" value={counts?.failed} />
     </div>
   );
 }
