@@ -388,6 +388,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "factory-guest"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "fastrand"
 version = "2.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -3,6 +3,9 @@ name = "craftlions-factory"
 version = "0.1.0"
 edition = "2024"
 
+[workspace]
+members = ["guest"]
+
 [dependencies]
 futures-lite = "2.6.1"
 getrandom = "0.4.3"
