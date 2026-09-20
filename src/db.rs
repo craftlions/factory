@@ -24,12 +24,19 @@ pub struct Sample {
 
 #[derive(Clone, Debug, Serialize, sqlx::FromRow)]
 pub struct Session {
-    pub id: i64,
+    pub id: String,
     pub kind: String,
     pub status: String,
     pub started_at: i64,
     pub ended_at: Option<i64>,
     pub note: Option<String>,
+    pub isolation: Option<String>,
+    pub workdir: Option<String>,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    pub reasoning: Option<String>,
+    pub harness_session_id: Option<String>,
+    pub harness_session_file: Option<String>,
 }
 
 pub async fn open(path: &Path) -> sqlx::Result<SqlitePool> {
@@ -105,6 +112,95 @@ pub async fn close_interrupted_sessions(pool: &SqlitePool, now: i64) -> sqlx::Re
     Ok(result.rows_affected())
 }
 
+/// Inserts a running session under a fresh random id.
+pub async fn insert_session(
+    pool: &SqlitePool,
+    request: &crate::sessions::CreateRequest,
+    now: i64,
+) -> sqlx::Result<String> {
+    const ATTEMPTS: usize = 8;
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let id = crate::ids::generate();
+        let inserted = sqlx::query(
+            "INSERT INTO sessions (id, kind, status, started_at, isolation, workdir, provider, model, reasoning) \
+             VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?)",
+        )
+        .bind(&id)
+        .bind(&request.harness)
+        .bind(now)
+        .bind(&request.isolation)
+        .bind(&request.workdir.kind)
+        .bind(&request.model.provider)
+        .bind(&request.model.id)
+        .bind(&request.model.reasoning)
+        .execute(pool)
+        .await;
+        match inserted {
+            Ok(_) => return Ok(id),
+            // The id is taken; draw another one.
+            Err(sqlx::Error::Database(error))
+                if error.is_unique_violation() && attempt < ATTEMPTS => {}
+            Err(error) => return Err(error),
+        }
+    }
+}
+
+pub async fn finish_session(
+    pool: &SqlitePool,
+    id: &str,
+    status: &str,
+    note: Option<&str>,
+    now: i64,
+) -> sqlx::Result<()> {
+    sqlx::query("UPDATE sessions SET status = ?, note = ?, ended_at = ? WHERE id = ?")
+        .bind(status)
+        .bind(note)
+        .bind(now)
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+pub async fn set_harness_session(
+    pool: &SqlitePool,
+    id: &str,
+    session_id: &str,
+    session_file: Option<&str>,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "UPDATE sessions SET harness_session_id = ?, harness_session_file = ? WHERE id = ?",
+    )
+    .bind(session_id)
+    .bind(session_file)
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+/// Marks an ended session as running again. Returns whether a row changed,
+/// so two concurrent resumes cannot both succeed.
+pub async fn reopen_session(pool: &SqlitePool, id: &str) -> sqlx::Result<bool> {
+    let result = sqlx::query(
+        "UPDATE sessions SET status = 'running', ended_at = NULL, note = NULL \
+         WHERE id = ? AND status != 'running'",
+    )
+    .bind(id)
+    .execute(pool)
+    .await?;
+    Ok(result.rows_affected() == 1)
+}
+
+pub async fn session(pool: &SqlitePool, id: &str) -> sqlx::Result<Option<Session>> {
+    sqlx::query_as("SELECT * FROM sessions WHERE id = ?")
+        .bind(id)
+        .fetch_optional(pool)
+        .await
+}
+
 pub async fn recent_sessions(pool: &SqlitePool, limit: i64) -> sqlx::Result<Vec<Session>> {
     sqlx::query_as("SELECT * FROM sessions ORDER BY started_at DESC, id DESC LIMIT ?")
         .bind(limit)
@@ -117,6 +213,7 @@ pub struct SessionCounts {
     pub running: i64,
     pub completed: i64,
     pub interrupted: i64,
+    pub failed: i64,
 }
 
 pub async fn session_counts(pool: &SqlitePool) -> sqlx::Result<SessionCounts> {
@@ -131,6 +228,7 @@ pub async fn session_counts(pool: &SqlitePool) -> sqlx::Result<SessionCounts> {
             "running" => counts.running = n,
             "completed" => counts.completed = n,
             "interrupted" => counts.interrupted = n,
+            "failed" => counts.failed = n,
             _ => {}
         }
     }

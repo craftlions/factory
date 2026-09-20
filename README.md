@@ -26,6 +26,9 @@ in `ui/package.json` and `ui/aube-lock.yaml`. Aube uses its current upstream
 `aubepkg/aube` repository explicitly because older mise registry entries still
 reference its previous release identity.
 
+`cargo test` runs the unit tests. `cargo test -- --ignored` also runs the pi
+adapter test, which needs pi installed and sends no prompt.
+
 ```bash
 mise run check
 mise run build
@@ -53,14 +56,41 @@ memory, and the number and size of files in the data directory. Samples are
 stored in SQLite through `sqlx` with embedded migrations from `migrations/` and
 pruned after seven days.
 
-Sessions are the unit of work. The service no longer records a session for
-its own process run, and nothing creates sessions yet; migration
-`0002_clear_sessions.sql` removed the earlier automatic rows. Any session still
-open at startup is marked `interrupted`. Microvm reporting over vsock is
-planned and not implemented.
+Sessions are the unit of work. A session is one harness process started and
+controlled by the factory. The factory only offers isolated sessions: running
+a harness directly on the host was removed, because harnesses execute shell
+commands without asking. The microvm runner is not implemented yet, so
+`POST /api/sessions` currently refuses every request, and sessions recorded
+earlier without isolation can be read but not restarted. Any session still
+open at startup is marked `interrupted`. Restarting one starts the harness
+again in the same workspace and continues the conversation from the harness's
+own session file.
+
+Session ids are six random characters from `6789bcdfghjkmnpqrtwx`: lowercase,
+no look-alike characters, no vowels. Rows from before that keep their number.
+After launch the harness reports its own session id and session file, which
+are stored with the session and used to read the transcript and to restart.
+
+Each session owns `sessions/<id>/` under the data directory: `workspace/` is
+the harness's working directory and is kept after the session ends, and
+`harness/` holds the session file the harness writes itself.
+
+`src/harness/mod.rs` defines a harness-agnostic chat model (`ChatItem`,
+`ChatEvent`) and two traits. `Harness` launches and controls a process.
+`TranscriptReader` parses that harness's own session file back into chat
+items, which is how ended sessions are shown. There is no transcript in
+SQLite. While a session runs, finished messages are kept in memory so a
+client that connects late gets a consistent snapshot plus the live stream.
+
+The pi adapter (`src/harness/pi.rs`) spawns `pi --mode rpc` and speaks its
+JSON-lines protocol over stdio. pi runs as the factory's user and uses that
+user's `~/.pi` configuration and credentials. `FACTORY_PI_BIN` overrides the
+binary, which defaults to `pi` on `PATH`. Providers, models and per-model
+reasoning levels are asked from pi on demand, never hardcoded. Extension dialogs are declined automatically because
+the chat has no dialog UI yet.
 
 The UI has a vertical navigation on the left, which collapses to a row on
-narrow screens, and three pages routed with the History API in
+narrow screens, and these pages routed with the History API in
 `ui/src/router.tsx`:
 
 | Path | Page |
@@ -75,7 +105,19 @@ narrow screens, and three pages routed with the History API in
 | `GET /api/overview` | Host facts, latest sample, session counts |
 | `GET /api/samples?window=SECONDS` | Samples from the last window, default one hour |
 | `GET /api/sessions` | Fifty most recent sessions |
+| `POST /api/sessions` | Create a session; 501 for combinations not implemented yet, 422 for no isolation |
+| `GET /api/sessions/<id>` | One session |
+| `GET /api/sessions/<id>/events` | SSE stream of `chat` events: one `snapshot`, then live updates while it runs |
+| `POST /api/sessions/<id>/prompt` | Send a message; it steers the agent if it is mid-run |
+| `POST /api/sessions/<id>/abort` | Interrupt the current run |
+| `POST /api/sessions/<id>/stop` | End the session and its harness process |
+| `POST /api/sessions/<id>/resume` | Restart an ended session and continue its conversation; 409 if it is running |
+| `GET /api/harnesses/<id>/models` | Models the harness reports for this host |
+| `GET /api/harnesses/<id>/reasoning?provider=&model=` | Reasoning levels the harness reports for one model |
 | `GET /api/events` | SSE stream, `sample` events; other `Accept` values get 406 |
+
+POST bodies must be `application/json`. That forces a CORS preflight the
+server never approves, so other websites cannot start or drive sessions.
 
 ## 1. Generate a dedicated APT signing key
 

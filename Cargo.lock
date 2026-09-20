@@ -194,6 +194,7 @@ name = "craftlions-factory"
 version = "0.1.0"
 dependencies = [
  "futures-lite",
+ "getrandom",
  "serde",
  "serde_json",
  "sqlx",
@@ -1646,6 +1647,7 @@ dependencies = [
  "libc",
  "mio",
  "pin-project-lite",
+ "signal-hook-registry",
  "socket2",
  "tokio-macros",
  "windows-sys",
