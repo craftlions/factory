@@ -13,12 +13,21 @@ export interface Sample {
 }
 
 export interface Session {
-  id: number;
+  id: string;
   kind: string;
-  status: 'running' | 'completed' | 'interrupted';
+  status: 'running' | 'completed' | 'interrupted' | 'failed';
   started_at: number;
   ended_at: number | null;
   note: string | null;
+  /** Null on rows from before sessions recorded their configuration. */
+  isolation: string | null;
+  workdir: string | null;
+  provider: string | null;
+  model: string | null;
+  reasoning: string | null;
+  /** The harness's own id and file for this session, once it has reported them. */
+  harness_session_id: string | null;
+  harness_session_file: string | null;
 }
 
 export interface Overview {
@@ -28,7 +37,7 @@ export interface Overview {
   uptime_seconds: number;
   sample_interval_seconds: number;
   latest: Sample | null;
-  sessions: { running: number; completed: number; interrupted: number };
+  sessions: { running: number; completed: number; interrupted: number; failed: number };
 }
 
 async function getJson<T>(url: string, signal: AbortSignal): Promise<T> {
@@ -36,6 +45,54 @@ async function getJson<T>(url: string, signal: AbortSignal): Promise<T> {
   if (!response.ok) throw new Error(`${url} responded ${response.status}`);
   return (await response.json()) as T;
 }
+
+/** POSTs JSON and returns the parsed body, or throws the server's error message. */
+async function postJson<T>(url: string, body: unknown): Promise<T | null> {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const text = await response.text();
+  const parsed = text ? (JSON.parse(text) as T & { error?: string }) : null;
+  if (!response.ok) throw new Error(parsed?.error ?? `${url} responded ${response.status}`);
+  return parsed;
+}
+
+export async function createSession(request: unknown): Promise<string> {
+  const created = await postJson<{ id: string }>('/api/sessions', request);
+  return created!.id;
+}
+export const sendPrompt = (id: string, message: string) => postJson(`/api/sessions/${id}/prompt`, { message });
+export const abortSession = (id: string) => postJson(`/api/sessions/${id}/abort`, {});
+/** Starts the harness again for an ended session, continuing its conversation. */
+export const resumeSession = (id: string) => postJson(`/api/sessions/${id}/resume`, {});
+export const stopSession = (id: string) => postJson(`/api/sessions/${id}/stop`, {});
+
+export interface HarnessModel {
+  provider: string;
+  id: string;
+  name: string;
+  context_window: number | null;
+  reasoning: boolean;
+}
+
+async function getJsonOrError<T>(url: string, signal: AbortSignal): Promise<T> {
+  const response = await fetch(url, { signal });
+  const body = (await response.json()) as T & { error?: string };
+  if (!response.ok) throw new Error(body.error ?? `${url} responded ${response.status}`);
+  return body;
+}
+
+/** Models the harness itself reports as usable on this host. */
+export const fetchHarnessModels = (harness: string, signal: AbortSignal) =>
+  getJsonOrError<HarnessModel[]>(`/api/harnesses/${harness}/models`, signal);
+/** Reasoning levels the harness reports for one model. */
+export const fetchReasoningLevels = (harness: string, provider: string, model: string, signal: AbortSignal) =>
+  getJsonOrError<string[]>(
+    `/api/harnesses/${harness}/reasoning?provider=${encodeURIComponent(provider)}&model=${encodeURIComponent(model)}`,
+    signal,
+  );
 
 export const fetchOverview = (signal: AbortSignal) => getJson<Overview>('/api/overview', signal);
 export const fetchSamples = (windowSeconds: number, signal: AbortSignal) =>

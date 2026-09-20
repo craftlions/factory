@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   fetchOverview, fetchSamples, fetchSessions, subscribeSamples,
   type Overview, type Sample, type Session,
@@ -15,6 +15,8 @@ export interface Dashboard {
   samples: Sample[];
   sessions: Session[];
   connection: Connection;
+  /** Reloads sessions and host facts now instead of at the next interval. */
+  refresh: () => void;
 }
 
 /** Appends samples newer than the tail of `prev`, then drops everything outside the history window. */
@@ -32,6 +34,8 @@ export function useDashboard(): Dashboard {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [stream, setStream] = useState<Stream>('connecting');
   const [loadFailed, setLoadFailed] = useState(false);
+  const [tick, setTick] = useState(0);
+  const refresh = useCallback(() => setTick((n) => n + 1), []);
 
   // Sessions and host facts change rarely; refresh them on a slow cadence.
   useEffect(() => {
@@ -55,7 +59,7 @@ export function useDashboard(): Dashboard {
       controller.abort();
       clearInterval(timer);
     };
-  }, []);
+  }, [tick]);
 
   // Samples arrive over the stream; history is backfilled on every (re)connect.
   useEffect(() => {
@@ -79,5 +83,5 @@ export function useDashboard(): Dashboard {
   }, []);
 
   const connection: Connection = loadFailed ? 'unavailable' : stream;
-  return { overview, samples, sessions, connection };
+  return { overview, samples, sessions, connection, refresh };
 }
