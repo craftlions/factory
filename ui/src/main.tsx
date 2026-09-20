@@ -1,4 +1,4 @@
-import { StrictMode, useEffect, useState } from 'react';
+import { StrictMode, useEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   fetchOverview, fetchSamples, fetchSessions, formatBytes, formatDuration, formatTime, subscribeSamples,
@@ -11,6 +11,13 @@ const HISTORY_SECONDS = 60 * 60;
 
 type Stream = 'connecting' | 'live' | 'reconnecting';
 type Connection = Stream | 'unavailable';
+
+const CONNECTION_LABEL: Record<Connection, string> = {
+  connecting: 'Connecting…',
+  live: 'Live',
+  reconnecting: 'Reconnecting…',
+  unavailable: 'Unavailable',
+};
 
 /** Appends samples newer than the tail of `prev`, then drops everything outside the history window. */
 function mergeSamples(prev: Sample[], incoming: Sample[]): Sample[] {
@@ -77,16 +84,31 @@ function useDashboard() {
   return { overview, samples, sessions, connection };
 }
 
-function Tile({ title, value, detail, series, max }: {
-  title: string; value: string; detail?: string; series: number[]; max?: number;
+function Tile({ title, value = '—', detail, series, max }: {
+  title: string; value?: string | number; detail?: string; series?: number[]; max?: number;
 }) {
   return (
     <section className="tile">
       <h2>{title}</h2>
       <p className="value">{value}</p>
       {detail && <p className="detail">{detail}</p>}
-      <Sparkline values={series} max={max} label={title} />
+      {series && <Sparkline values={series} max={max} label={title} />}
     </section>
+  );
+}
+
+function UsageTile({ title, used, total, series }: {
+  title: string; used?: number; total?: number; series: number[];
+}) {
+  const known = used !== undefined && total !== undefined;
+  return (
+    <Tile
+      title={title}
+      value={known ? `${percent(used, total).toFixed(0)} %` : undefined}
+      detail={known ? `${formatBytes(used)} of ${formatBytes(total)}` : undefined}
+      series={series}
+      max={100}
+    />
   );
 }
 
@@ -97,6 +119,13 @@ function percent(used: number, total: number): number {
 function App() {
   const { overview, samples, sessions, connection } = useDashboard();
   const latest = samples.at(-1) ?? overview?.latest ?? undefined;
+  const series = useMemo(() => ({
+    cpu: samples.map((s) => s.cpu_percent),
+    mem: samples.map((s) => percent(s.mem_used, s.mem_total)),
+    disk: samples.map((s) => percent(s.disk_used, s.disk_total)),
+    rss: samples.map((s) => s.process_rss),
+    data: samples.map((s) => s.data_bytes),
+  }), [samples]);
 
   return (
     <>
@@ -107,58 +136,41 @@ function App() {
             {overview ? `${overview.hostname} · ${overview.os} · v${overview.version}` : 'Loading…'}
           </p>
         </div>
-        <p role="status" className={`connection ${connection}`}>
-          {connection === 'live' && 'Live'}
-          {connection === 'connecting' && 'Connecting…'}
-          {connection === 'reconnecting' && 'Reconnecting…'}
-          {connection === 'unavailable' && 'Unavailable'}
-        </p>
+        <p role="status" className={`connection ${connection}`}>{CONNECTION_LABEL[connection]}</p>
       </header>
 
       <main>
         <div className="tiles">
           <Tile
             title="CPU"
-            value={latest ? `${latest.cpu_percent.toFixed(0)} %` : '—'}
-            detail={latest ? `load ${latest.load1.toFixed(2)}` : undefined}
-            series={samples.map((s) => s.cpu_percent)}
+            value={latest && `${latest.cpu_percent.toFixed(0)} %`}
+            detail={latest && `load ${latest.load1.toFixed(2)}`}
+            series={series.cpu}
             max={100}
           />
-          <Tile
-            title="Memory"
-            value={latest ? `${percent(latest.mem_used, latest.mem_total).toFixed(0)} %` : '—'}
-            detail={latest ? `${formatBytes(latest.mem_used)} of ${formatBytes(latest.mem_total)}` : undefined}
-            series={samples.map((s) => percent(s.mem_used, s.mem_total))}
-            max={100}
-          />
-          <Tile
-            title="Disk"
-            value={latest ? `${percent(latest.disk_used, latest.disk_total).toFixed(0)} %` : '—'}
-            detail={latest ? `${formatBytes(latest.disk_used)} of ${formatBytes(latest.disk_total)}` : undefined}
-            series={samples.map((s) => percent(s.disk_used, s.disk_total))}
-            max={100}
-          />
+          <UsageTile title="Memory" used={latest?.mem_used} total={latest?.mem_total} series={series.mem} />
+          <UsageTile title="Disk" used={latest?.disk_used} total={latest?.disk_total} series={series.disk} />
           <Tile
             title="Service"
-            value={latest ? formatBytes(latest.process_rss) : '—'}
-            detail={latest ? `${latest.process_cpu_percent.toFixed(1)} % CPU · up ${overview ? formatDuration(overview.uptime_seconds) : ''}` : undefined}
-            series={samples.map((s) => s.process_rss)}
+            value={latest && formatBytes(latest.process_rss)}
+            detail={latest && overview
+              ? `${latest.process_cpu_percent.toFixed(1)} % CPU · up ${formatDuration(overview.uptime_seconds)}`
+              : undefined}
+            series={series.rss}
           />
           <Tile
             title="Data"
-            value={latest ? formatBytes(latest.data_bytes) : '—'}
-            detail={latest ? `${latest.data_files} file${latest.data_files === 1 ? '' : 's'}` : undefined}
-            series={samples.map((s) => s.data_bytes)}
+            value={latest && formatBytes(latest.data_bytes)}
+            detail={latest && `${latest.data_files} file${latest.data_files === 1 ? '' : 's'}`}
+            series={series.data}
           />
-          <section className="tile">
-            <h2>Sessions</h2>
-            <p className="value">{overview ? overview.sessions.running : '—'}</p>
-            <p className="detail">
-              {overview
-                ? `running · ${overview.sessions.completed} completed · ${overview.sessions.interrupted} interrupted`
-                : undefined}
-            </p>
-          </section>
+          <Tile
+            title="Sessions"
+            value={overview?.sessions.running}
+            detail={overview
+              ? `running · ${overview.sessions.completed} completed · ${overview.sessions.interrupted} interrupted`
+              : undefined}
+          />
         </div>
 
         <section className="panel">
@@ -173,7 +185,7 @@ function App() {
                 </thead>
                 <tbody>
                   {sessions.map((s) => {
-                    const end = s.ended_at ?? (latest?.ts ?? s.started_at);
+                    const end = s.ended_at ?? latest?.ts ?? s.started_at;
                     return (
                       <tr key={s.id}>
                         <td>{s.kind}</td>
