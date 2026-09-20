@@ -56,8 +56,8 @@ pruned after seven days.
 Sessions are the unit of work. The service no longer records a session for
 its own process run, and nothing creates sessions yet; migration
 `0002_clear_sessions.sql` removed the earlier automatic rows. Any session still
-open at startup is marked `interrupted`. Microvm reporting over vsock is listed
-as a planned source and not implemented.
+open at startup is marked `interrupted`. Microvm reporting over vsock is
+planned and not implemented.
 
 The UI has a vertical navigation on the left, which collapses to a row on
 narrow screens, and three pages routed with the History API in
@@ -65,14 +65,14 @@ narrow screens, and three pages routed with the History API in
 
 | Path | Page |
 | --- | --- |
-| `/` | Overview: session counts and sources |
+| `/` | Overview: session counts |
 | `/sessions` | Fifty most recent sessions |
 | `/host` | Host, service, and data directory stats with one hour of history |
 
 | Endpoint | Purpose |
 | --- | --- |
 | `GET /api/health` | Liveness, `{"status":"ok"}` |
-| `GET /api/overview` | Host facts, latest sample, session counts, sources |
+| `GET /api/overview` | Host facts, latest sample, session counts |
 | `GET /api/samples?window=SECONDS` | Samples from the last window, default one hour |
 | `GET /api/sessions` | Fifty most recent sessions |
 | `GET /api/events` | SSE stream, `sample` events; other `Accept` values get 406 |

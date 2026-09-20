@@ -25,13 +25,6 @@ struct App {
 }
 
 #[derive(Serialize)]
-struct Source {
-    name: &'static str,
-    status: &'static str,
-    detail: String,
-}
-
-#[derive(Serialize)]
 struct Overview {
     version: &'static str,
     hostname: String,
@@ -40,35 +33,12 @@ struct Overview {
     sample_interval_seconds: u64,
     latest: Option<Sample>,
     sessions: db::SessionCounts,
-    sources: Vec<Source>,
 }
 
 impl App {
     async fn overview(&self) -> sqlx::Result<Overview> {
         let latest = db::latest_sample(&self.pool).await?;
         let sessions = db::session_counts(&self.pool).await?;
-        let sources = vec![
-            Source {
-                name: "host",
-                status: "active",
-                detail: "CPU, memory, load, and disk sampled with sysinfo".into(),
-            },
-            Source {
-                name: "process",
-                status: "active",
-                detail: "CPU and resident memory of the factory service".into(),
-            },
-            Source {
-                name: "files",
-                status: "active",
-                detail: "Files in the factory data directory".into(),
-            },
-            Source {
-                name: "microvm",
-                status: "planned",
-                detail: "vsock guest reporting is not implemented yet".into(),
-            },
-        ];
         Ok(Overview {
             version: VERSION,
             hostname: self.hostname.clone(),
@@ -77,7 +47,6 @@ impl App {
             sample_interval_seconds: collector::INTERVAL.as_secs(),
             latest,
             sessions,
-            sources,
         })
     }
 }

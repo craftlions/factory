@@ -21,12 +21,6 @@ export interface Session {
   note: string | null;
 }
 
-export interface Source {
-  name: string;
-  status: 'active' | 'planned';
-  detail: string;
-}
-
 export interface Overview {
   version: string;
   hostname: string;
@@ -35,7 +29,6 @@ export interface Overview {
   sample_interval_seconds: number;
   latest: Sample | null;
   sessions: { running: number; completed: number; interrupted: number };
-  sources: Source[];
 }
 
 async function getJson<T>(url: string, signal: AbortSignal): Promise<T> {
