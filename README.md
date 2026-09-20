@@ -29,6 +29,10 @@ reference its previous release identity.
 `cargo test` runs the unit tests. `cargo test -- --ignored` also runs the pi
 adapter test, which needs pi installed and sends no prompt.
 
+On a stop signal the server ends its event streams first, so an open browser
+tab cannot keep a stopping process alive and holding the port during
+`mise run dev` restarts.
+
 ```bash
 mise run check
 mise run build

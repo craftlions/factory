@@ -16,6 +16,7 @@ use tokio_stream::wrappers::BroadcastStream;
 use trillium::{Conn, Method};
 use trillium_sse::{Event, Sse, SseHandler};
 use trillium_static::{StaticConnExt, StaticFileHandler};
+use trillium_tokio::Swansong;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const HISTORY_WINDOW: i64 = 60 * 60;
@@ -282,6 +283,10 @@ fn chat_event(value: &impl Serialize) -> Option<Event> {
 struct Streams {
     samples: broadcast::Sender<Sample>,
     sessions: Arc<Sessions>,
+    /// Event streams never end by themselves. Graceful shutdown waits for open
+    /// connections, so without this a single browser tab keeps a stopping
+    /// server alive and holding its port while its replacement fails to bind.
+    shutdown: Swansong,
 }
 
 impl SseHandler for Streams {
@@ -289,6 +294,13 @@ impl SseHandler for Streams {
     type EventStream = EventStream;
 
     async fn connect(&self, conn: &mut Conn) -> EventStream {
+        // Ends the stream as soon as shutdown begins.
+        Box::pin(self.shutdown.interrupt(self.events(conn).await))
+    }
+}
+
+impl Streams {
+    async fn events(&self, conn: &Conn) -> EventStream {
         let Some(id) = session_events_id(conn.path()) else {
             return sample_events(&self.samples);
         };
@@ -363,12 +375,15 @@ async fn main() {
         os: System::long_os_version().unwrap_or_else(|| "unknown".into()),
     });
     let api_app = app.clone();
+    let shutdown = Swansong::new();
     let streams = Streams {
         samples: app.events.clone(),
         sessions,
+        shutdown: shutdown.clone(),
     };
 
     trillium_tokio::config()
+        .with_swansong(shutdown)
         .with_host(&host)
         .with_port(port)
         .run_async((
