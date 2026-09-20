@@ -185,15 +185,6 @@ async fn main() {
     if interrupted > 0 {
         eprintln!("closed {interrupted} interrupted session(s)");
     }
-    let session_id = db::start_session(
-        &pool,
-        "service",
-        started_at,
-        Some(&format!("craftlions-factory {VERSION}")),
-    )
-    .await
-    .expect("session must be recorded");
-
     let (events, _) = broadcast::channel(16);
     tokio::spawn(collector::run(pool.clone(), data_dir, events.clone()));
 
@@ -256,8 +247,5 @@ async fn main() {
         ))
         .await;
 
-    if let Err(error) = db::end_session(&pool, session_id, collector::now()).await {
-        eprintln!("failed to close session: {error}");
-    }
     pool.close().await;
 }

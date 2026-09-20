@@ -105,32 +105,6 @@ pub async fn close_interrupted_sessions(pool: &SqlitePool, now: i64) -> sqlx::Re
     Ok(result.rows_affected())
 }
 
-pub async fn start_session(
-    pool: &SqlitePool,
-    kind: &str,
-    started_at: i64,
-    note: Option<&str>,
-) -> sqlx::Result<i64> {
-    let result = sqlx::query(
-        "INSERT INTO sessions (kind, status, started_at, note) VALUES (?, 'running', ?, ?)",
-    )
-    .bind(kind)
-    .bind(started_at)
-    .bind(note)
-    .execute(pool)
-    .await?;
-    Ok(result.last_insert_rowid())
-}
-
-pub async fn end_session(pool: &SqlitePool, id: i64, ended_at: i64) -> sqlx::Result<()> {
-    sqlx::query("UPDATE sessions SET status = 'completed', ended_at = ? WHERE id = ?")
-        .bind(ended_at)
-        .bind(id)
-        .execute(pool)
-        .await?;
-    Ok(())
-}
-
 pub async fn recent_sessions(pool: &SqlitePool, limit: i64) -> sqlx::Result<Vec<Session>> {
     sqlx::query_as("SELECT * FROM sessions ORDER BY started_at DESC, id DESC LIMIT ?")
         .bind(limit)

@@ -53,10 +53,11 @@ memory, and the number and size of files in the data directory. Samples are
 stored in SQLite through `sqlx` with embedded migrations from `migrations/` and
 pruned after seven days.
 
-Sessions are the unit of work. For now the only session kind is `service`: one
-row per run of the process, closed as `completed` on clean shutdown. Any
-session still open at startup is marked `interrupted`. Microvm reporting over
-vsock is listed as a planned source and not implemented.
+Sessions are the unit of work. The service no longer records a session for
+its own process run, and nothing creates sessions yet; migration
+`0002_clear_sessions.sql` removed the earlier automatic rows. Any session still
+open at startup is marked `interrupted`. Microvm reporting over vsock is listed
+as a planned source and not implemented.
 
 | Endpoint | Purpose |
 | --- | --- |
