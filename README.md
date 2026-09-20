@@ -49,8 +49,8 @@ On Debian, the single systemd service serves port 80, reads UI files from
 `/var/lib/craftlions-factory` (a systemd `StateDirectory`). `FACTORY_HOST`,
 `FACTORY_PORT`, `FACTORY_UI_DIR`, and `FACTORY_DATA_DIR` override those
 defaults; the dev tasks use `./data`, which is gitignored. Node and Aube are build tools only;
-the appliance does not need a JavaScript server. CI builds both parts, installs
-the package, and checks its HTTP endpoints before publishing.
+the appliance does not need a JavaScript server. CI builds both parts and
+publishes the package without installing or testing it.
 
 ## Dashboard
 
