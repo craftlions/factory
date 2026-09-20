@@ -1,41 +1,50 @@
 import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
-  fetchOverview, fetchSamples, fetchSessions, formatBytes, formatDuration, formatTime,
+  fetchOverview, fetchSamples, fetchSessions, formatBytes, formatDuration, formatTime, subscribeSamples,
   type Overview, type Sample, type Session,
 } from './api';
 import { Sparkline } from './Sparkline';
 import './style.css';
 
 const HISTORY_SECONDS = 60 * 60;
-const MAX_POINTS = Math.ceil(HISTORY_SECONDS / 5) + 1;
 
-type Connection = 'connecting' | 'live' | 'reconnecting' | 'unavailable';
+type Stream = 'connecting' | 'live' | 'reconnecting';
+type Connection = Stream | 'unavailable';
+
+/** Appends samples newer than the tail of `prev`, then drops everything outside the history window. */
+function mergeSamples(prev: Sample[], incoming: Sample[]): Sample[] {
+  const lastTs = prev.length > 0 ? prev[prev.length - 1].ts : -Infinity;
+  const merged = [...prev, ...incoming.filter((s) => s.ts > lastTs)];
+  if (merged.length === 0) return merged;
+  const cutoff = merged[merged.length - 1].ts - HISTORY_SECONDS;
+  return merged.filter((s) => s.ts >= cutoff);
+}
 
 function useDashboard() {
   const [overview, setOverview] = useState<Overview | null>(null);
   const [samples, setSamples] = useState<Sample[]>([]);
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [connection, setConnection] = useState<Connection>('connecting');
+  const [stream, setStream] = useState<Stream>('connecting');
+  const [loadFailed, setLoadFailed] = useState(false);
 
+  // Sessions and host facts change rarely; refresh them on a slow cadence.
   useEffect(() => {
     const controller = new AbortController();
     async function load() {
       try {
-        const [o, s, sess] = await Promise.all([
+        const [o, sess] = await Promise.all([
           fetchOverview(controller.signal),
-          fetchSamples(HISTORY_SECONDS, controller.signal),
           fetchSessions(controller.signal),
         ]);
         setOverview(o);
-        setSamples(s);
         setSessions(sess);
+        setLoadFailed(false);
       } catch {
-        if (!controller.signal.aborted) setConnection('unavailable');
+        if (!controller.signal.aborted) setLoadFailed(true);
       }
     }
     void load();
-    // Sessions and host facts change rarely; refresh them on a slow cadence.
     const timer = setInterval(load, 60_000);
     return () => {
       controller.abort();
@@ -43,18 +52,28 @@ function useDashboard() {
     };
   }, []);
 
+  // Samples arrive over the stream; history is backfilled on every (re)connect.
   useEffect(() => {
-    const source = new EventSource('/api/events');
-    source.onopen = () => setConnection('live');
-    source.onerror = () => setConnection((c) => (c === 'unavailable' ? c : 'reconnecting'));
-    source.addEventListener('sample', (event: MessageEvent<string>) => {
-      const sample = JSON.parse(event.data) as Sample;
-      setSamples((prev) => [...prev, sample].slice(-MAX_POINTS));
-      setOverview((prev) => (prev ? { ...prev, latest: sample } : prev));
+    const controller = new AbortController();
+    const unsubscribe = subscribeSamples({
+      onOpen: () => {
+        setStream('live');
+        fetchSamples(HISTORY_SECONDS, controller.signal)
+          .then((history) => setSamples((prev) => mergeSamples(history, prev)))
+          .catch(() => {
+            if (!controller.signal.aborted) setLoadFailed(true);
+          });
+      },
+      onSample: (sample) => setSamples((prev) => mergeSamples(prev, [sample])),
+      onError: () => setStream('reconnecting'),
     });
-    return () => source.close();
+    return () => {
+      controller.abort();
+      unsubscribe();
+    };
   }, []);
 
+  const connection: Connection = loadFailed ? 'unavailable' : stream;
   return { overview, samples, sessions, connection };
 }
 
@@ -77,7 +96,7 @@ function percent(used: number, total: number): number {
 
 function App() {
   const { overview, samples, sessions, connection } = useDashboard();
-  const latest = overview?.latest ?? null;
+  const latest = samples.at(-1) ?? overview?.latest ?? undefined;
 
   return (
     <>

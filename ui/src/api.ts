@@ -49,6 +49,24 @@ export const fetchSamples = (windowSeconds: number, signal: AbortSignal) =>
   getJson<Sample[]>(`/api/samples?window=${windowSeconds}`, signal);
 export const fetchSessions = (signal: AbortSignal) => getJson<Session[]>('/api/sessions', signal);
 
+/**
+ * Subscribes to the live sample stream. `onOpen` fires on every (re)connect, so callers can
+ * backfill whatever the stream missed. Returns the unsubscribe function.
+ */
+export function subscribeSamples(handlers: {
+  onOpen: () => void;
+  onSample: (sample: Sample) => void;
+  onError: () => void;
+}): () => void {
+  const source = new EventSource('/api/events');
+  source.onopen = handlers.onOpen;
+  source.onerror = handlers.onError;
+  source.addEventListener('sample', (event: MessageEvent<string>) => {
+    handlers.onSample(JSON.parse(event.data) as Sample);
+  });
+  return () => source.close();
+}
+
 export function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   const units = ['KiB', 'MiB', 'GiB', 'TiB'];
