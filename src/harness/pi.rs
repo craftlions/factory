@@ -1,59 +1,37 @@
-//! pi adapter. Live control uses pi's RPC mode (`pi --mode rpc`, JSON lines
+//! pi adapter. Live control speaks pi's RPC mode (`pi --mode rpc`, JSON lines
 //! over stdio, see pi's docs/rpc.md). Ended sessions are read from the JSONL
 //! session file pi writes itself (docs/session-format.md).
 
 use super::{
-    Block, BlockKind, ChatEvent, ChatItem, Command, Harness, LaunchSpec, ModelInfo, Resume,
-    Running, TranscriptReader, Update, clip,
+    Block, BlockKind, ChatEvent, ChatItem, Command, Harness, Invocation, LaunchSpec, ModelInfo,
+    Process, Query, Resume, TranscriptReader, Update, clip,
 };
 use serde_json::{Value, json};
 use std::{
     collections::HashMap,
-    env, fs, io,
+    fs, io,
     path::Path,
-    process::Stdio,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
 };
 use tokio::{
-    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
-    process::{Child, ChildStdin},
-    sync::{mpsc, oneshot},
+    io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader},
+    sync::mpsc,
 };
 
 const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
-const STOP_GRACE: Duration = Duration::from_secs(3);
-const STDERR_TAIL: usize = 20;
 
 pub struct Pi;
 
-fn binary() -> std::ffi::OsString {
-    env::var_os("FACTORY_PI_BIN").unwrap_or_else(|| "pi".into())
-}
-
-fn command(args: &[&str], cwd: &Path) -> tokio::process::Command {
-    let mut cmd = tokio::process::Command::new(binary());
-    cmd.arg("--mode")
-        .arg("rpc")
-        .args(args)
-        .current_dir(cwd)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .kill_on_drop(true);
-    cmd
-}
-
-fn describe_spawn_error(error: io::Error) -> io::Error {
-    if error.kind() == io::ErrorKind::NotFound {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            "pi was not found. Install it or set FACTORY_PI_BIN to its path.",
-        )
-    } else {
-        error
+fn invocation(args: &[&str]) -> Invocation {
+    let mut all = vec!["--mode".to_owned(), "rpc".to_owned()];
+    all.extend(args.iter().map(|arg| (*arg).to_owned()));
+    Invocation {
+        program: "pi".into(),
+        args: all,
     }
 }
 
@@ -339,15 +317,14 @@ fn translate(
     }
 }
 
-async fn write_line(stdin: &mut ChildStdin, line: &str) -> io::Result<()> {
+async fn write_line(stdin: &mut (impl AsyncWrite + Unpin), line: &str) -> io::Result<()> {
     stdin.write_all(line.as_bytes()).await?;
     stdin.write_all(b"\n").await?;
     stdin.flush().await
 }
 
 impl Harness for Pi {
-    fn launch(&self, spec: &LaunchSpec) -> io::Result<Running> {
-        let state_dir = spec.state_dir.to_string_lossy();
+    fn invocation(&self, spec: &LaunchSpec) -> Invocation {
         let mut args = vec![
             "--provider",
             spec.provider,
@@ -356,38 +333,38 @@ impl Harness for Pi {
             "--thinking",
             spec.reasoning,
             "--session-dir",
-            &state_dir,
+            spec.state_dir,
         ];
-        let resume_file;
         match spec.resume {
             Resume::No => {}
-            Resume::File(file) => {
-                resume_file = file.to_string_lossy();
-                args.extend(["--session", &resume_file]);
-            }
+            Resume::File(file) => args.extend(["--session", file]),
             Resume::Newest => args.push("--continue"),
         }
-        let mut child = command(&args, spec.workspace)
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(describe_spawn_error)?;
+        invocation(&args)
+    }
 
-        let mut stdin = child.stdin.take().expect("stdin is piped");
-        let stdout = child.stdout.take().expect("stdout is piped");
-        let stderr = child.stderr.take().expect("stderr is piped");
-
-        let (commands, mut command_rx) = mpsc::unbounded_channel::<Command>();
-        let (update_tx, updates) = mpsc::unbounded_channel::<Update>();
+    fn attach(
+        &self,
+        process: Process,
+        spec: &LaunchSpec,
+        mut commands: mpsc::UnboundedReceiver<Command>,
+        updates: mpsc::UnboundedSender<Update>,
+    ) {
+        let Process {
+            mut stdin,
+            stdout,
+            stop,
+            exited,
+        } = process;
         let (line_tx, mut line_rx) = mpsc::unbounded_channel::<String>();
-        let (stop_tx, stop_rx) = oneshot::channel::<()>();
         let working = Arc::new(AtomicBool::new(false));
-        let stderr_tail = Arc::new(Mutex::new(Vec::<String>::new()));
 
-        // Commands become RPC lines. Stop closes stdin, which makes pi exit.
+        // Commands become RPC lines. Stop ends the line stream, which closes
+        // stdin so pi can exit by itself, and tells the environment to end it.
         let command_working = working.clone();
         let command_lines = line_tx.clone();
         tokio::spawn(async move {
-            while let Some(command) = command_rx.recv().await {
+            while let Some(command) = commands.recv().await {
                 let line = match command {
                     Command::Prompt(message) if command_working.load(Ordering::Relaxed) => {
                         json!({"type": "prompt", "message": message, "streamingBehavior": "steer"})
@@ -400,21 +377,17 @@ impl Harness for Pi {
                     return;
                 }
             }
-            let _ = stop_tx.send(());
+            let _ = command_lines.send(String::new());
+            let _ = stop.send(());
         });
 
-        let (close_tx, mut close_rx) = oneshot::channel::<()>();
         tokio::spawn(async move {
-            loop {
-                tokio::select! {
-                    line = line_rx.recv() => match line {
-                        Some(line) => if write_line(&mut stdin, &line).await.is_err() { break },
-                        None => break,
-                    },
-                    _ = &mut close_rx => break,
+            while let Some(line) = line_rx.recv().await {
+                // The empty line is the stop marker; dropping stdin sends EOF.
+                if line.is_empty() || write_line(&mut stdin, &line).await.is_err() {
+                    break;
                 }
             }
-            // Dropping stdin here sends EOF.
         });
 
         // Asked first: the answer identifies pi's session, and the chat shows a
@@ -422,7 +395,7 @@ impl Harness for Pi {
         let _ = line_tx.send(json!({"type": "get_state"}).to_string());
         let expected = (spec.provider.to_owned(), spec.model.to_owned());
 
-        let reader_tx = update_tx.clone();
+        let reader_tx = updates.clone();
         let reader = tokio::spawn(async move {
             // `lines` splits on LF only, as pi's framing requires.
             let mut lines = BufReader::new(stdout).lines();
@@ -447,67 +420,90 @@ impl Harness for Pi {
             }
         });
 
-        let tail = stderr_tail.clone();
-        let stderr_reader = tokio::spawn(async move {
-            let mut lines = BufReader::new(stderr).lines();
-            while let Ok(Some(line)) = lines.next_line().await {
-                let mut tail = tail.lock().expect("stderr tail lock");
-                if tail.len() == STDERR_TAIL {
-                    tail.remove(0);
-                }
-                tail.push(line);
-            }
-        });
-
         tokio::spawn(async move {
-            let (status, stopped) = tokio::select! {
-                status = child.wait() => (status, false),
-                _ = stop_rx => (stop(&mut child, close_tx).await, true),
-            };
+            let failure = exited
+                .await
+                .unwrap_or_else(|_| Some("the environment running pi went away".into()));
             let _ = reader.await;
-            let _ = stderr_reader.await;
-            let failure = match status {
-                _ if stopped => None,
-                Ok(status) if status.success() => None,
-                Ok(status) => {
-                    let tail = stderr_tail.lock().expect("stderr tail lock").join("\n");
-                    Some(format!("pi exited with {status}. {tail}").trim().to_owned())
-                }
-                Err(error) => Some(format!("waiting for pi failed: {error}")),
-            };
-            let _ = update_tx.send(Update::Exited { failure });
+            let _ = updates.send(Update::Exited { failure });
         });
-
-        Ok(Running { commands, updates })
     }
-}
 
-/// Closes stdin so pi can exit on its own, then kills it after a grace period.
-async fn stop(
-    child: &mut Child,
-    close: oneshot::Sender<()>,
-) -> io::Result<std::process::ExitStatus> {
-    let _ = close.send(());
-    match tokio::time::timeout(STOP_GRACE, child.wait()).await {
-        Ok(status) => status,
-        Err(_) => {
-            child.start_kill()?;
-            child.wait().await
+    fn catalog_invocation(&self, model: Option<(&str, &str)>) -> Invocation {
+        // Offline: a catalog question must not wait on startup network calls.
+        match model {
+            Some((provider, id)) => invocation(&[
+                "--no-session",
+                "--offline",
+                "--provider",
+                provider,
+                "--model",
+                id,
+            ]),
+            None => invocation(&["--no-session", "--offline"]),
         }
+    }
+
+    fn models(&self, process: Process) -> Query<'static, Vec<ModelInfo>> {
+        Box::pin(async move {
+            let data = query(process, &["get_available_models"]).await?;
+            Ok(data[0]["models"]
+                .as_array()
+                .map(|models| {
+                    models
+                        .iter()
+                        .filter_map(|model| {
+                            let id = model["id"].as_str()?;
+                            Some(ModelInfo {
+                                provider: model["provider"].as_str()?.to_owned(),
+                                id: id.to_owned(),
+                                name: model["name"].as_str().unwrap_or(id).to_owned(),
+                                context_window: model["contextWindow"].as_u64(),
+                                reasoning: model["reasoning"].as_bool().unwrap_or(false),
+                                base_url: model["baseUrl"].as_str().map(str::to_owned),
+                            })
+                        })
+                        .collect()
+                })
+                .unwrap_or_default())
+        })
+    }
+
+    fn reasoning_levels(
+        &self,
+        process: Process,
+        provider: String,
+        model: String,
+    ) -> Query<'static, Vec<String>> {
+        Box::pin(async move {
+            let data = query(process, &["get_state", "get_available_thinking_levels"]).await?;
+            if let Some(mismatch) = model_mismatch(&data[0], &provider, &model) {
+                return Err(io::Error::new(io::ErrorKind::NotFound, mismatch));
+            }
+            Ok(data[1]["levels"]
+                .as_array()
+                .map(|levels| {
+                    levels
+                        .iter()
+                        .filter_map(|l| l.as_str().map(str::to_owned))
+                        .collect()
+                })
+                .unwrap_or_default())
+        })
     }
 }
 
 // ---- catalog queries ----
 
-/// Starts a throwaway pi, sends the requests, and returns each response's
-/// `data` in the same order.
-async fn query(args: &[&str], requests: &[&str]) -> io::Result<Vec<Value>> {
-    let mut cmd = command(args, &env::temp_dir());
-    cmd.arg("--no-session").stderr(Stdio::null());
-    let mut child = cmd.spawn().map_err(describe_spawn_error)?;
-    let mut stdin = child.stdin.take().expect("stdin is piped");
-    let stdout = child.stdout.take().expect("stdout is piped");
-
+/// Sends the requests to a throwaway pi and returns each response's `data` in
+/// the same order, then has the environment end the process.
+async fn query(process: Process, requests: &[&str]) -> io::Result<Vec<Value>> {
+    let Process {
+        mut stdin,
+        stdout,
+        stop,
+        exited,
+    } = process;
     let exchange = async {
         for (id, request) in requests.iter().enumerate() {
             write_line(
@@ -548,7 +544,8 @@ async fn query(args: &[&str], requests: &[&str]) -> io::Result<Vec<Value>> {
     let result = tokio::time::timeout(QUERY_TIMEOUT, exchange)
         .await
         .unwrap_or_else(|_| Err(io::Error::other("pi did not answer in time")));
-    let _ = child.kill().await;
+    let _ = stop.send(());
+    let _ = exited.await;
     result
 }
 
@@ -567,55 +564,28 @@ fn model_mismatch(state: &Value, provider: &str, model: &str) -> Option<String> 
     })
 }
 
-pub async fn models() -> io::Result<Vec<ModelInfo>> {
-    let data = query(&[], &["get_available_models"]).await?;
-    Ok(data[0]["models"]
-        .as_array()
-        .map(|models| {
-            models
-                .iter()
-                .filter_map(|model| {
-                    let id = model["id"].as_str()?;
-                    Some(ModelInfo {
-                        provider: model["provider"].as_str()?.to_owned(),
-                        id: id.to_owned(),
-                        name: model["name"].as_str().unwrap_or(id).to_owned(),
-                        context_window: model["contextWindow"].as_u64(),
-                        reasoning: model["reasoning"].as_bool().unwrap_or(false),
-                    })
-                })
-                .collect()
-        })
-        .unwrap_or_default())
-}
-
-pub async fn reasoning_levels(provider: &str, model: &str) -> io::Result<Vec<String>> {
-    let data = query(
-        &["--provider", provider, "--model", model],
-        &["get_state", "get_available_thinking_levels"],
-    )
-    .await?;
-    if let Some(mismatch) = model_mismatch(&data[0], provider, model) {
-        return Err(io::Error::new(io::ErrorKind::NotFound, mismatch));
-    }
-    Ok(data[1]["levels"]
-        .as_array()
-        .map(|levels| {
-            levels
-                .iter()
-                .filter_map(|l| l.as_str().map(str::to_owned))
-                .collect()
-        })
-        .unwrap_or_default())
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::local;
     use super::*;
+    use std::env;
 
-    async fn identity(running: &mut Running) -> (String, Option<String>) {
+    struct Session {
+        commands: mpsc::UnboundedSender<Command>,
+        updates: mpsc::UnboundedReceiver<Update>,
+    }
+
+    fn start(workspace: &Path, spec: &LaunchSpec) -> Session {
+        let process = local::spawn(&Pi.invocation(spec), workspace).unwrap();
+        let (commands, command_rx) = mpsc::unbounded_channel();
+        let (update_tx, updates) = mpsc::unbounded_channel();
+        Pi.attach(process, spec, command_rx, update_tx);
+        Session { commands, updates }
+    }
+
+    async fn identity(session: &mut Session) -> (String, Option<String>) {
         loop {
-            match running
+            match session
                 .updates
                 .recv()
                 .await
@@ -630,12 +600,12 @@ mod tests {
         }
     }
 
-    async fn stop(mut running: Running) {
-        running
+    async fn stop(mut session: Session) {
+        session
             .commands
             .send(Command::Stop)
             .expect("adapter is alive");
-        while let Some(update) = running.updates.recv().await {
+        while let Some(update) = session.updates.recv().await {
             if matches!(update, Update::Exited { .. }) {
                 return;
             }
@@ -651,22 +621,19 @@ mod tests {
         let (workspace, state_dir) = (root.join("workspace"), root.join("harness"));
         fs::create_dir_all(&workspace).unwrap();
         fs::create_dir_all(&state_dir).unwrap();
+        let state = state_dir.to_str().unwrap();
         let spec = |resume| LaunchSpec {
-            workspace: &workspace,
-            state_dir: &state_dir,
+            state_dir: state,
             provider: "openrouter",
             model: "z-ai/glm-5.3-flash",
             reasoning: "low",
             resume,
         };
 
-        let mut first = Pi.launch(&spec(Resume::No)).unwrap();
+        let mut first = start(&workspace, &spec(Resume::No));
         let (first_id, first_file) = identity(&mut first).await;
         stop(first).await;
-        let file = std::path::PathBuf::from(first_file.expect("pi reports its session file"));
-        assert!(
-            file.starts_with(state_dir.canonicalize().unwrap()) || file.starts_with(&state_dir)
-        );
+        let file = first_file.expect("pi reports its session file");
 
         // pi writes the file only once the conversation has a message, so one
         // is written here in pi's documented format instead of paying for a prompt.
@@ -683,14 +650,38 @@ mod tests {
         )
         .unwrap();
 
-        let mut second = Pi.launch(&spec(Resume::File(&file))).unwrap();
+        let mut second = start(&workspace, &spec(Resume::File(&file)));
         let (second_id, second_file) = identity(&mut second).await;
         stop(second).await;
         assert_eq!(second_id, first_id);
-        assert_eq!(second_file.as_deref(), file.to_str());
-        let items = Pi.read(&state_dir, Some(&file)).unwrap();
+        assert_eq!(second_file.as_deref(), Some(file.as_str()));
+        let items = Pi.read(&state_dir, Some(Path::new(&file))).unwrap();
         assert!(matches!(items.as_slice(), [ChatItem::User { text, .. }] if text == "hello"));
 
         fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[tokio::test]
+    #[ignore]
+    async fn catalog_lists_models_and_levels() {
+        let cwd = env::temp_dir();
+        let models = Pi
+            .models(local::spawn(&Pi.catalog_invocation(None), &cwd).unwrap())
+            .await
+            .unwrap();
+        let model = models
+            .iter()
+            .find(|m| m.base_url.is_some())
+            .expect("a model with a base url");
+        let process = local::spawn(
+            &Pi.catalog_invocation(Some((&model.provider, &model.id))),
+            &cwd,
+        )
+        .unwrap();
+        let levels = Pi
+            .reasoning_levels(process, model.provider.clone(), model.id.clone())
+            .await
+            .unwrap();
+        assert!(!levels.is_empty());
     }
 }

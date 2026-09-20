@@ -1,7 +1,9 @@
 mod collector;
 mod db;
+mod guest_protocol;
 mod harness;
 mod ids;
+mod microvm;
 mod sessions;
 
 use db::Sample;
@@ -231,7 +233,7 @@ async fn api(mut conn: Conn, app: Arc<App>) -> Conn {
             }
         }
 
-        (true, _, ["harnesses", id, "models"]) => match harness::models(id).await {
+        (true, _, ["harnesses", id, "models"]) => match app.sessions.models(id).await {
             Some(Ok(models)) => json(conn, &models).halt(),
             Some(Err(cause)) => error(conn, 502, cause).halt(),
             None => error(conn, 404, "no catalog for this harness").halt(),
@@ -242,7 +244,7 @@ async fn api(mut conn: Conn, app: Arc<App>) -> Conn {
             else {
                 return error(conn, 422, "provider and model are required").halt();
             };
-            match harness::reasoning_levels(id, &provider, &model).await {
+            match app.sessions.reasoning_levels(id, &provider, &model).await {
                 Some(Ok(levels)) => json(conn, &levels).halt(),
                 Some(Err(cause)) => error(conn, 502, cause).halt(),
                 None => error(conn, 404, "no catalog for this harness").halt(),
@@ -364,7 +366,11 @@ async fn main() {
         eprintln!("closed {interrupted} interrupted session(s)");
     }
     let (events, _) = broadcast::channel(16);
-    let sessions = Arc::new(Sessions::new(pool.clone(), &data_dir));
+    let sessions = Arc::new(Sessions::new(
+        pool.clone(),
+        &data_dir,
+        microvm::Microvm::from_env(&data_dir),
+    ));
     tokio::spawn(collector::run(pool.clone(), data_dir, events.clone()));
 
     let app = Arc::new(App {

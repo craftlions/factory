@@ -35,4 +35,4 @@ depends = ["ui:build"]
 run = "cargo build --release --locked"
 
 [tasks.check]
-run = ["cargo fmt --check", "cargo clippy --locked -- -D warnings", "cd ui && aube run check"]
+run = ["cargo fmt --check", "cargo clippy --locked --workspace --all-targets -- -D warnings", "cd ui && aube run check"]

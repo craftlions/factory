@@ -4,12 +4,17 @@
 //! its harness's wire protocol into those while a session runs, and parses the
 //! harness's own session file into the same items once it has ended.
 
+#[cfg(test)]
+pub mod local;
 pub mod pi;
 
 use serde::Serialize;
 use serde_json::Value;
-use std::{io, path::Path};
-use tokio::sync::mpsc;
+use std::{future::Future, io, path::Path, pin::Pin};
+use tokio::{
+    io::{AsyncRead, AsyncWrite},
+    sync::{mpsc, oneshot},
+};
 
 /// Tool output kept per result; harness session files keep the full text.
 const MAX_TOOL_OUTPUT: usize = 64 * 1024;
@@ -131,10 +136,11 @@ pub enum Update {
     },
 }
 
+/// How to start a harness. Paths are as the harness sees them, which inside a
+/// microvm are guest paths.
 pub struct LaunchSpec<'a> {
-    pub workspace: &'a Path,
     /// Directory the harness keeps its own session file in.
-    pub state_dir: &'a Path,
+    pub state_dir: &'a str,
     pub provider: &'a str,
     pub model: &'a str,
     pub reasoning: &'a str,
@@ -146,24 +152,41 @@ pub struct LaunchSpec<'a> {
 pub enum Resume<'a> {
     No,
     /// The recorded session file.
-    File(&'a Path),
+    File(&'a str),
     /// The newest session in `state_dir`, for rows without a recorded file.
     Newest,
 }
 
-pub struct Running {
-    pub commands: mpsc::UnboundedSender<Command>,
-    pub updates: mpsc::UnboundedReceiver<Update>,
+/// The command line that starts a harness, for whatever environment runs it.
+#[derive(Clone, Debug)]
+pub struct Invocation {
+    pub program: String,
+    pub args: Vec<String>,
 }
 
-#[derive(Debug, Serialize)]
+/// A harness process, wherever it runs. The environment that started it owns
+/// its lifetime; an adapter only speaks the harness's protocol over the pipes.
+pub struct Process {
+    pub stdin: Box<dyn AsyncWrite + Send + Unpin>,
+    pub stdout: Box<dyn AsyncRead + Send + Unpin>,
+    /// Asks the environment to end the process. Dropping it unsent is not a stop.
+    pub stop: oneshot::Sender<()>,
+    /// Resolves once the process is gone, with the reason if it failed.
+    pub exited: oneshot::Receiver<Option<String>>,
+}
+
+#[derive(Clone, Debug, Serialize)]
 pub struct ModelInfo {
     pub provider: String,
     pub id: String,
     pub name: String,
     pub context_window: Option<u64>,
     pub reasoning: bool,
+    /// Where the provider's API lives: the host a session of this model may reach.
+    pub base_url: Option<String>,
 }
+
+pub type Query<'a, T> = Pin<Box<dyn Future<Output = io::Result<T>> + Send + 'a>>;
 
 /// Reads a harness's own session file back into chat items.
 pub trait TranscriptReader: Send + Sync {
@@ -171,34 +194,39 @@ pub trait TranscriptReader: Send + Sync {
     fn read(&self, state_dir: &Path, session_file: Option<&Path>) -> io::Result<Vec<ChatItem>>;
 }
 
-/// Starts and controls one kind of harness.
+/// Speaks one kind of harness's protocol. It never starts a process itself:
+/// an isolated environment does that from the `Invocation` and hands back the
+/// `Process`.
 pub trait Harness: TranscriptReader {
-    fn launch(&self, spec: &LaunchSpec) -> io::Result<Running>;
+    fn invocation(&self, spec: &LaunchSpec) -> Invocation;
+
+    /// Drives `process` until it exits: commands go in, updates come out, and
+    /// `Update::Exited` is always the last one.
+    fn attach(
+        &self,
+        process: Process,
+        spec: &LaunchSpec,
+        commands: mpsc::UnboundedReceiver<Command>,
+        updates: mpsc::UnboundedSender<Update>,
+    );
+
+    /// A throwaway invocation for catalog questions. With a model, the harness
+    /// is started on that model so it can be asked about it.
+    fn catalog_invocation(&self, model: Option<(&str, &str)>) -> Invocation;
+    /// Models the harness can use right now, asked from the harness itself.
+    fn models(&self, process: Process) -> Query<'static, Vec<ModelInfo>>;
+    /// Reasoning levels the harness reports for the model `process` was started on.
+    fn reasoning_levels(
+        &self,
+        process: Process,
+        provider: String,
+        model: String,
+    ) -> Query<'static, Vec<String>>;
 }
 
 pub fn by_id(id: &str) -> Option<&'static dyn Harness> {
     match id {
         "pi" => Some(&pi::Pi),
-        _ => None,
-    }
-}
-
-/// Models the harness can use right now, asked from the harness itself.
-pub async fn models(id: &str) -> Option<io::Result<Vec<ModelInfo>>> {
-    match id {
-        "pi" => Some(pi::models().await),
-        _ => None,
-    }
-}
-
-/// Reasoning levels the harness reports for one model.
-pub async fn reasoning_levels(
-    id: &str,
-    provider: &str,
-    model: &str,
-) -> Option<io::Result<Vec<String>>> {
-    match id {
-        "pi" => Some(pi::reasoning_levels(provider, model).await),
         _ => None,
     }
 }

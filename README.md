@@ -26,8 +26,10 @@ in `ui/package.json` and `ui/aube-lock.yaml`. Aube uses its current upstream
 `aubepkg/aube` repository explicitly because older mise registry entries still
 reference its previous release identity.
 
-`cargo test` runs the unit tests. `cargo test -- --ignored` also runs the pi
-adapter test, which needs pi installed and sends no prompt.
+`cargo test --workspace` runs the tests. They include the microvm runner
+working against the real guest agent, with a stand-in for Firecracker that
+starts the agent as a plain process. `cargo test -- --ignored` adds tests that
+need pi installed; one of them sends a tiny prompt.
 
 On a stop signal the server ends its event streams first, so an open browser
 tab cannot keep a stopping process alive and holding the port during
@@ -60,38 +62,86 @@ memory, and the number and size of files in the data directory. Samples are
 stored in SQLite through `sqlx` with embedded migrations from `migrations/` and
 pruned after seven days.
 
-Sessions are the unit of work. A session is one harness process started and
-controlled by the factory. The factory only offers isolated sessions: running
-a harness directly on the host was removed, because harnesses execute shell
-commands without asking. The microvm runner is not implemented yet, so
-`POST /api/sessions` currently refuses every request, and sessions recorded
-earlier without isolation can be read but not restarted. Any session still
-open at startup is marked `interrupted`. Restarting one starts the harness
-again in the same workspace and continues the conversation from the harness's
-own session file.
+Sessions are the unit of work. A session is one harness process that the
+factory starts and controls inside its own Firecracker microvm. Harnesses
+execute shell commands without asking, so they never run directly on the
+host; sessions recorded earlier without isolation can be read but not
+restarted. So far one combination can be created: the pi harness, in a
+microvm, with a new empty directory. Any session still open at startup is
+marked `interrupted`. Restarting one boots a new microvm on the same disk and
+continues the conversation from the harness's own session file.
 
 Session ids are six random characters from `6789bcdfghjkmnpqrtwx`: lowercase,
 no look-alike characters, no vowels. Rows from before that keep their number.
 After launch the harness reports its own session id and session file, which
 are stored with the session and used to read the transcript and to restart.
 
-Each session owns `sessions/<id>/` under the data directory: `workspace/` is
-the harness's working directory and is kept after the session ends, and
-`harness/` holds the session file the harness writes itself.
-
 `src/harness/mod.rs` defines a harness-agnostic chat model (`ChatItem`,
-`ChatEvent`) and two traits. `Harness` launches and controls a process.
-`TranscriptReader` parses that harness's own session file back into chat
-items, which is how ended sessions are shown. There is no transcript in
-SQLite. While a session runs, finished messages are kept in memory so a
-client that connects late gets a consistent snapshot plus the live stream.
+`ChatEvent`) and two traits. `Harness` says how to start a harness and speaks
+its protocol over a `Process`, a pair of pipes that the isolated environment
+hands over; an adapter never starts a process itself. `TranscriptReader`
+parses that harness's own session file back into chat items, which is how
+ended sessions are shown. There is no transcript in SQLite. While a session
+runs, finished messages are kept in memory so a client that connects late gets
+a consistent snapshot plus the live stream.
 
-The pi adapter (`src/harness/pi.rs`) spawns `pi --mode rpc` and speaks its
-JSON-lines protocol over stdio. pi runs as the factory's user and uses that
-user's `~/.pi` configuration and credentials. `FACTORY_PI_BIN` overrides the
-binary, which defaults to `pi` on `PATH`. Providers, models and per-model
-reasoning levels are asked from pi on demand, never hardcoded. Extension dialogs are declined automatically because
-the chat has no dialog UI yet.
+The pi adapter (`src/harness/pi.rs`) speaks the JSON-lines protocol of
+`pi --mode rpc`. Providers, models and per-model reasoning levels are asked
+from pi on demand, in a small catalog microvm, never hardcoded. Extension
+dialogs are declined automatically because the chat has no dialog UI yet.
+
+## Session microvms
+
+`src/microvm/` runs a harness in Firecracker. Nothing in it needs root: the
+service only needs access to `/dev/kvm`, which the systemd unit gets through
+the `kvm` group.
+
+- **Boot.** The guest kernel and the minimal Ubuntu root filesystem are the
+  ones the Firecracker project publishes. They are downloaded on first use to
+  `microvm/` under the data directory. The root filesystem is booted
+  read-only and unmodified, shared by all sessions.
+- **Guest agent.** `guest/` is a small static binary that is the only file in
+  the initramfs and therefore the guest's first process. It layers the
+  session's own disk over the root filesystem, runs the setup script, then the
+  harness, and shuts the machine down when the harness ends.
+- **Disk.** Each session has a sparse `disk.ext4` in `sessions/<id>/`. It
+  holds everything the session installs or writes, the workspace, and the
+  harness's session file. When a session ends, `harness/` and `workspace/` are
+  copied out of the disk with `debugfs`, next to it.
+- **Tools.** `packaging/guest/startup.sh` runs at every session start and
+  installs the tools in `packaging/guest/mise.toml` with mise. A restarted
+  session finds them on its disk already.
+- **Network.** The guest has no network device. The agent forwards a loopback
+  port over vsock to a proxy in the factory, which only opens TLS connections
+  to the API host of the session's model, taken from pi's own model list, and
+  to the three GitHub hosts mise needs. Addresses in private ranges are
+  refused even for allowed names. Every refusal shows up in the chat.
+- **Credentials.** pi's `auth.json`, and `models.json` and `settings.json` if
+  present, are read from `pi/agent/` under the data directory and copied into
+  each guest. Code running in the guest can read them. OAuth tokens that pi
+  refreshes inside a guest are not written back.
+- **Limits.** Firecracker runs without its jailer, which needs root. The
+  published guest files carry no checksums; mise and Firecracker are verified.
+  mise asks the GitHub API at every start, which allows 60 anonymous requests
+  an hour per address.
+
+`FACTORY_FIRECRACKER_BIN`, `FACTORY_GUEST_INITRD` and `FACTORY_GUEST_DIR`
+override where the monitor, the initramfs and the guest files are found; the
+package installs them under `/usr/lib/craftlions-factory`.
+
+To try it on a Debian host with KVM, install the package, then give pi its
+credentials and create a session in the UI:
+
+```bash
+sudo install -d -o craftlions-factory -g craftlions-factory -m 0700 \
+  /var/lib/craftlions-factory/pi /var/lib/craftlions-factory/pi/agent
+sudo install -o craftlions-factory -g craftlions-factory -m 0600 \
+  ~/.pi/agent/auth.json /var/lib/craftlions-factory/pi/agent/auth.json
+```
+
+The first model list takes a few minutes: it downloads the guest files and
+installs pi in the catalog microvm. If a microvm does not come up, its console
+is in `sessions/<id>/vm/console.log`, and the end of it is shown in the chat.
 
 The UI has a vertical navigation on the left, which collapses to a row on
 narrow screens, and these pages routed with the History API in

@@ -1,0 +1,4 @@
+# Tools every session microvm installs at start, before the harness runs.
+# The factory mounts this file read-only into the guest as mise's global config.
+[tools]
+"github:earendil-works/pi" = "0.86.1"
