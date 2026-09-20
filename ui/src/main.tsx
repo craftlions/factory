@@ -8,6 +8,7 @@ import { Sparkline } from './Sparkline';
 import './style.css';
 
 const HISTORY_SECONDS = 60 * 60;
+const HISTORY_LABEL = 'over the last hour';
 
 type Stream = 'connecting' | 'live' | 'reconnecting';
 type Connection = Stream | 'unavailable';
@@ -92,7 +93,7 @@ function Tile({ title, value = '—', detail, series, max }: {
       <h2>{title}</h2>
       <p className="value">{value}</p>
       {detail && <p className="detail">{detail}</p>}
-      {series && <Sparkline values={series} max={max} label={title} />}
+      {series && <Sparkline values={series} max={max} label={`${title} ${HISTORY_LABEL}`} />}
     </section>
   );
 }
