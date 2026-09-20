@@ -17,7 +17,7 @@ and proxies `/api` to Rust on port 8081. Use port 5173 for both the UI and API
 during development. `mise watch`, powered by watchexec, rebuilds and restarts
 Rust when `src/`, `Cargo.toml`, or `Cargo.lock` changes. Frontend edits do not
 restart Rust. `mise run server` starts Rust once without watching.
-The dashboard loads `/api/overview`, `/api/samples`, and `/api/sessions`, then
+The UI loads `/api/overview`, `/api/samples`, and `/api/sessions`, then
 subscribes to `/api/events` (server-sent events) for a new sample every five
 seconds.
 
@@ -58,6 +58,16 @@ its own process run, and nothing creates sessions yet; migration
 `0002_clear_sessions.sql` removed the earlier automatic rows. Any session still
 open at startup is marked `interrupted`. Microvm reporting over vsock is listed
 as a planned source and not implemented.
+
+The UI has a vertical navigation on the left, which collapses to a row on
+narrow screens, and three pages routed with the History API in
+`ui/src/router.tsx`:
+
+| Path | Page |
+| --- | --- |
+| `/` | Overview: session counts and sources |
+| `/sessions` | Fifty most recent sessions |
+| `/host` | Host, service, and data directory stats with one hour of history |
 
 | Endpoint | Purpose |
 | --- | --- |

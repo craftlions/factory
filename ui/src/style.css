@@ -8,6 +8,7 @@
   --warn: light-dark(#b45309, #f2a950);
   --bad: light-dark(#b42318, #f28b82);
   --accent: light-dark(#145dcc, #91baff);
+  --hover: light-dark(#e9ecf1, #272d37);
 }
 
 body {
@@ -15,8 +16,63 @@ body {
   line-height: 1.5;
 }
 
-header, main {
+.shell {
+  display: grid;
+  grid-template-columns: 14rem minmax(0, 1fr);
+  min-height: 100vh;
+}
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  box-sizing: border-box;
+  height: 100vh;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+  padding: 2rem 1rem 1.5rem;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.brand {
+  margin: 0;
+  padding: 0 0.75rem;
+  font-weight: 700;
+}
+
+nav {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+nav a {
+  padding: 0.45rem 0.75rem;
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: none;
+}
+nav a:hover { background: var(--hover); }
+nav a[aria-current="page"] {
+  background: var(--hover);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.host {
+  margin-top: auto;
+  padding: 0 0.75rem;
+  font-size: 0.8rem;
+  overflow-wrap: anywhere;
+}
+
+.content {
+  width: 100%;
   max-width: 72rem;
+  box-sizing: border-box;
   margin: 0 auto;
   padding: 0 1.5rem;
 }
@@ -24,11 +80,13 @@ header, main {
 header {
   display: flex;
   justify-content: space-between;
-  align-items: flex-start;
+  align-items: center;
   gap: 1rem;
   padding-top: 2rem;
   padding-bottom: 1rem;
 }
+
+main a { color: var(--accent); }
 
 h1 {
   margin: 0;
@@ -119,26 +177,21 @@ tr:last-child td { border-bottom: none; }
   font-weight: 600;
   border: 1px solid currentColor;
 }
-.badge.running, .badge.active { color: var(--ok); }
+.badge.running { color: var(--ok); }
 .badge.completed, .badge.interrupted { color: var(--warn); }
 
-.sources {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: grid;
-  gap: 0.5rem;
-}
-
-.sources li {
-  display: grid;
-  grid-template-columns: auto auto 1fr;
-  gap: 0.75rem;
-  align-items: baseline;
-}
-
-@media (max-width: 40rem) {
-  header { flex-direction: column; }
-  .sources li { grid-template-columns: auto 1fr; }
-  .sources li .detail { grid-column: 1 / -1; }
+@media (max-width: 48rem) {
+  .shell { display: block; }
+  .sidebar {
+    position: static;
+    height: auto;
+    gap: 0.75rem;
+    padding: 1rem;
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+  }
+  nav { flex-direction: row; flex-wrap: wrap; }
+  .host { display: none; }
+  .content { padding: 0 1rem; }
+  header { padding-top: 1.25rem; }
 }
