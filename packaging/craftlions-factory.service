@@ -7,6 +7,8 @@ Type=simple
 
 User=craftlions-factory
 Group=craftlions-factory
+# Session microvms need /dev/kvm.
+SupplementaryGroups=kvm
 
 ExecStart=/usr/bin/craftlions-factory
 StateDirectory=craftlions-factory

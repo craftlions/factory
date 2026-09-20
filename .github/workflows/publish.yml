@@ -101,6 +101,33 @@ jobs:
         # mise can select a different toolchain; use the one with musl installed.
         run: rustup run "$PACKAGE_RUST_TOOLCHAIN" cargo build --locked --release --target x86_64-unknown-linux-musl
 
+      - name: Build guest initramfs
+        env:
+          PACKAGE_RUST_TOOLCHAIN: ${{ steps.rust.outputs.name }}
+        # The guest agent is the only file in the initramfs: a static binary
+        # named /init, which the kernel runs as the microvm's first process.
+        run: |
+          set -eux
+          rustup run "$PACKAGE_RUST_TOOLCHAIN" cargo build --locked --release --target x86_64-unknown-linux-musl -p factory-guest
+          INITRAMFS="$RUNNER_TEMP/initramfs"
+          mkdir -p "$INITRAMFS"
+          install -m 0755 target/x86_64-unknown-linux-musl/release/factory-guest "$INITRAMFS/init"
+          (cd "$INITRAMFS" && echo init | cpio -o -H newc) > "$RUNNER_TEMP/guest-initramfs.cpio"
+
+      - name: Download Firecracker
+        env:
+          FIRECRACKER_VERSION: v1.17.0
+          FIRECRACKER_SHA256: 06094a1108ae9e82aa4c23a775aa92758f53f1175d422270d9d6162cb9ade558
+        run: |
+          set -eux
+          TGZ="firecracker-${FIRECRACKER_VERSION}-x86_64.tgz"
+          curl -fsSL -o "$RUNNER_TEMP/$TGZ" \
+            "https://github.com/firecracker-microvm/firecracker/releases/download/${FIRECRACKER_VERSION}/${TGZ}"
+          echo "${FIRECRACKER_SHA256}  $RUNNER_TEMP/$TGZ" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/$TGZ" -C "$RUNNER_TEMP"
+          cp "$RUNNER_TEMP/release-${FIRECRACKER_VERSION}-x86_64/firecracker-${FIRECRACKER_VERSION}-x86_64" \
+            "$RUNNER_TEMP/firecracker"
+
       - name: Build .deb
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -113,12 +140,21 @@ jobs:
           mkdir -p "$PKGROOT/usr/bin"
           mkdir -p "$PKGROOT/usr/lib/systemd/system"
           mkdir -p "$PKGROOT/usr/share/craftlions-factory/ui"
+          mkdir -p "$PKGROOT/usr/lib/craftlions-factory/guest"
 
           cp -R ui/dist/. "$PKGROOT/usr/share/craftlions-factory/ui/"
 
           install -m 0755 \
             target/x86_64-unknown-linux-musl/release/craftlions-factory \
             "$PKGROOT/usr/bin/craftlions-factory"
+
+          # What a session microvm needs: the monitor, the initramfs holding the
+          # guest agent, and the files that go onto the guest's tools drive.
+          install -m 0755 "$RUNNER_TEMP/firecracker" "$PKGROOT/usr/lib/craftlions-factory/firecracker"
+          install -m 0644 "$RUNNER_TEMP/guest-initramfs.cpio" \
+            "$PKGROOT/usr/lib/craftlions-factory/guest-initramfs.cpio"
+          install -m 0755 packaging/guest/startup.sh "$PKGROOT/usr/lib/craftlions-factory/guest/startup.sh"
+          install -m 0644 packaging/guest/mise.toml "$PKGROOT/usr/lib/craftlions-factory/guest/mise.toml"
 
           install -m 0644 packaging/craftlions-factory.service \
             "$PKGROOT/usr/lib/systemd/system/craftlions-factory.service"
@@ -133,7 +169,7 @@ jobs:
           Priority: optional
           Architecture: amd64
           Maintainer: craftlions <alexander@craftlions.com>
-          Depends: systemd
+          Depends: systemd, curl, e2fsprogs
           Description: craftlions Factory
           CONTROL
 
