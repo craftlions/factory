@@ -20,7 +20,7 @@ use proxy::AllowList;
 use std::{
     collections::BTreeMap,
     env, io,
-    path::{Path, PathBuf},
+    path::{Component, Path, PathBuf},
     process::Stdio,
     sync::Arc,
     time::Duration,
@@ -55,6 +55,9 @@ fn tool_hosts(tools: &str) -> &'static [&'static str] {
             "github.com",
             "release-assets.githubusercontent.com",
         ],
+        // Node from its own downloads, the ACP adapter and the Claude Code
+        // binary it depends on from npm.
+        "claude" => &["nodejs.org", "registry.npmjs.org"],
         _ => &[],
     }
 }
@@ -376,6 +379,23 @@ impl Microvm {
         fs::remove_dir_all(&staging).await?;
         fs::write(&stamp, "").await
     }
+
+    /// A path the host can open for a file the harness named inside the guest,
+    /// once `extract` has copied the harness state to `state_dir`. A file from
+    /// outside the guest's state directory is looked for by its name.
+    pub fn extracted(&self, state_dir: &Path, guest_file: &str) -> Option<PathBuf> {
+        let guest_file = Path::new(guest_file);
+        match guest_file.strip_prefix(self.state_dir()) {
+            Ok(relative)
+                if relative
+                    .components()
+                    .all(|part| matches!(part, Component::Normal(_))) =>
+            {
+                Some(state_dir.join(relative))
+            }
+            _ => guest_file.file_name().map(|name| state_dir.join(name)),
+        }
+    }
 }
 
 struct AbortOnDrop(tokio::task::JoinHandle<()>);
@@ -481,11 +501,4 @@ async fn supervise(
                 .to_owned(),
         ),
     }
-}
-
-/// A path the host can open for a file the harness named inside the guest.
-pub fn extracted(state_dir: &Path, guest_file: &str) -> Option<PathBuf> {
-    Path::new(guest_file)
-        .file_name()
-        .map(|name| state_dir.join(name))
 }

@@ -6,7 +6,7 @@ use crate::{
     collector, credentials, db,
     guest_protocol::GuestFile,
     harness::{self, ChatEvent, ChatItem, Command, Harness, LaunchSpec, ModelInfo, Resume, Update},
-    microvm::{self, Microvm, VmRequest, proxy},
+    microvm::{Microvm, VmRequest, proxy},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -97,10 +97,18 @@ struct Launch {
     provider: String,
     model: String,
     reasoning: String,
-    /// The harness's session file inside the guest, when continuing one.
-    resume: Option<Option<String>>,
+    /// The harness's own session, when continuing one.
+    resume: Option<Recorded>,
     /// API hosts the harness may reach.
     hosts: Vec<String>,
+}
+
+/// What the harness reported about its session. Rows from before harnesses
+/// reported anything have neither.
+struct Recorded {
+    id: Option<String>,
+    /// Inside the guest.
+    file: Option<String>,
 }
 
 struct LiveState {
@@ -438,15 +446,20 @@ impl Sessions {
         updates: mpsc::UnboundedSender<Update>,
     ) {
         let state_dir = self.microvm.state_dir();
+        let cwd = self.microvm.workspace();
         let spec = LaunchSpec {
             state_dir: &state_dir,
+            cwd: &cwd,
             provider: &launch.provider,
             model: &launch.model,
             reasoning: &launch.reasoning,
             resume: match &launch.resume {
                 None => Resume::No,
-                Some(Some(file)) => Resume::File(file),
-                Some(None) => Resume::Newest,
+                Some(Recorded { id: Some(id), file }) => Resume::Recorded {
+                    id,
+                    file: file.as_deref(),
+                },
+                Some(Recorded { id: None, .. }) => Resume::Newest,
             },
         };
         let invocation = launch.adapter.invocation(&spec);
@@ -580,7 +593,10 @@ impl Sessions {
             provider: provider.clone(),
             model: model.clone(),
             reasoning: reasoning.clone(),
-            resume: Some(session.harness_session_file.clone()),
+            resume: Some(Recorded {
+                id: session.harness_session_id.clone(),
+                file: session.harness_session_file.clone(),
+            }),
             hosts,
         };
         self.attach(id, launch, items);
@@ -602,7 +618,7 @@ impl Sessions {
         let file = session
             .harness_session_file
             .as_deref()
-            .and_then(|guest| microvm::extracted(&state_dir, guest))
+            .and_then(|guest| self.microvm.extracted(&state_dir, guest))
             .filter(|file| file.is_file());
         tokio::task::spawn_blocking(move || adapter.read(&state_dir, file.as_deref()))
             .await

@@ -4,6 +4,8 @@
 //! its harness's wire protocol into those while a session runs, and parses the
 //! harness's own session file into the same items once it has ended.
 
+pub mod acp;
+pub mod claude;
 pub mod pi;
 
 use serde::Serialize;
@@ -139,6 +141,8 @@ pub enum Update {
 pub struct LaunchSpec<'a> {
     /// Directory the harness keeps its own session file in.
     pub state_dir: &'a str,
+    /// The harness's working directory.
+    pub cwd: &'a str,
     pub provider: &'a str,
     pub model: &'a str,
     pub reasoning: &'a str,
@@ -149,9 +153,12 @@ pub struct LaunchSpec<'a> {
 #[derive(Clone, Copy, Debug)]
 pub enum Resume<'a> {
     No,
-    /// The recorded session file.
-    File(&'a str),
-    /// The newest session in `state_dir`, for rows without a recorded file.
+    /// The session the harness reported: its id, and its file when it has one.
+    Recorded {
+        id: &'a str,
+        file: Option<&'a str>,
+    },
+    /// The newest session in `state_dir`, for rows without a recorded session.
     Newest,
 }
 
@@ -227,6 +234,7 @@ pub trait Harness: TranscriptReader {
 pub fn by_id(id: &str) -> Option<&'static dyn Harness> {
     match id {
         "pi" => Some(&pi::Pi),
+        "claude" => Some(&claude::Claude),
         _ => None,
     }
 }

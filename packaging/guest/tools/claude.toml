@@ -1,0 +1,7 @@
+# Tools a Claude Code session's microvm installs at start, before the harness
+# runs: Claude Code's ACP adapter, which brings the Claude Code binary along as
+# a dependency of the Claude Agent SDK. The factory mounts this file read-only
+# into the guest as mise's global config.
+[tools]
+node = "24.21.0"
+"npm:@agentclientprotocol/claude-agent-acp" = "0.89.1"

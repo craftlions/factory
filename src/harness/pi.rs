@@ -339,8 +339,10 @@ impl Harness for Pi {
         ];
         match spec.resume {
             Resume::No => {}
-            Resume::File(file) => args.extend(["--session", file]),
-            Resume::Newest => args.push("--continue"),
+            Resume::Recorded {
+                file: Some(file), ..
+            } => args.extend(["--session", file]),
+            Resume::Recorded { file: None, .. } | Resume::Newest => args.push("--continue"),
         }
         invocation(&args)
     }
