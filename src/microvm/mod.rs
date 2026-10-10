@@ -68,6 +68,8 @@ pub struct VmRequest<'a> {
     pub tools: &'a str,
     /// Written inside the guest before anything runs.
     pub files: Vec<GuestFile>,
+    /// Secrets for the harness, passed as environment variables.
+    pub env: Vec<(String, String)>,
     /// Hosts the harness may reach, beyond what tool setup needs.
     pub hosts: Vec<String>,
     /// Setup output, and everything the proxy refuses, as readable lines.
@@ -158,6 +160,7 @@ impl Microvm {
         .map(|(key, value)| (key.to_owned(), value))
         .collect();
         env.extend(request.invocation.env.iter().cloned());
+        env.extend(request.env.iter().cloned());
 
         let mut harness = self.wrapper.clone();
         harness.push(request.invocation.program.clone());

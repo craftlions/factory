@@ -1,4 +1,5 @@
 mod collector;
+mod credentials;
 mod db;
 mod guest_protocol;
 mod harness;
@@ -142,11 +143,51 @@ struct PromptRequest {
     message: String,
 }
 
+#[derive(Serialize)]
+struct Settings {
+    credentials: Vec<credentials::Status>,
+    /// pi reads its own credentials file, which is placed by hand.
+    pi_auth: PiAuth,
+}
+
+#[derive(Serialize)]
+struct PiAuth {
+    path: String,
+    present: bool,
+}
+
+async fn settings(app: &App) -> sqlx::Result<Settings> {
+    let (path, present) = app.sessions.pi_auth();
+    Ok(Settings {
+        credentials: credentials::statuses(&app.pool).await?,
+        pi_auth: PiAuth {
+            path: path.display().to_string(),
+            present,
+        },
+    })
+}
+
 async fn api(mut conn: Conn, app: Arc<App>) -> Conn {
     let path = conn.path().to_owned();
     let segments: Vec<&str> = path.trim_start_matches("/api/").split('/').collect();
     let method = conn.method();
     let read = matches!(method, Method::Get | Method::Head);
+
+    if method == Method::Delete {
+        return match segments.as_slice() {
+            ["settings", "credentials", harness] if credentials::harness(harness).is_some() => {
+                match db::delete_credential(&app.pool, harness).await {
+                    Ok(()) => conn.with_status(204).halt(),
+                    Err(cause) => db_error(conn, cause).halt(),
+                }
+            }
+            ["settings", "credentials", _] => error(conn, 404, "no such harness").halt(),
+            _ => conn
+                .with_response_header("allow", "GET, HEAD, POST")
+                .with_status(405)
+                .halt(),
+        };
+    }
 
     match (read, method == Method::Post, segments.as_slice()) {
         (true, _, ["health"]) => json(conn, &serde_json::json!({ "status": "ok" })).halt(),
@@ -230,6 +271,27 @@ async fn api(mut conn: Conn, app: Arc<App>) -> Conn {
                 conn.with_status(202).halt()
             } else {
                 error(conn, 409, "the session is not running").halt()
+            }
+        }
+
+        (true, _, ["settings"]) => match settings(&app).await {
+            Ok(settings) => json(conn, &settings).halt(),
+            Err(cause) => db_error(conn, cause).halt(),
+        },
+        (_, true, ["settings", "credentials", harness]) => {
+            let entry = match json_body::<credentials::Entry>(&mut conn).await {
+                Ok(entry) => entry,
+                Err(message) => return error(conn, 400, message).halt(),
+            };
+            let secret = match credentials::validate(harness, &entry) {
+                Ok(secret) => secret,
+                Err(message) => return error(conn, 422, message).halt(),
+            };
+            match db::set_credential(&app.pool, harness, &entry.kind, secret, collector::now())
+                .await
+            {
+                Ok(()) => conn.with_status(204).halt(),
+                Err(cause) => db_error(conn, cause).halt(),
             }
         }
 

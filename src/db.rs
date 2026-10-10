@@ -234,3 +234,55 @@ pub async fn session_counts(pool: &SqlitePool) -> sqlx::Result<SessionCounts> {
     }
     Ok(counts)
 }
+
+/// Deliberately not `Debug`, so the secret never ends up in a log.
+#[derive(Clone, sqlx::FromRow)]
+pub struct Credential {
+    pub harness: String,
+    pub kind: String,
+    pub secret: String,
+    pub updated_at: i64,
+}
+
+pub async fn credential(pool: &SqlitePool, harness: &str) -> sqlx::Result<Option<Credential>> {
+    sqlx::query_as("SELECT * FROM credentials WHERE harness = ?")
+        .bind(harness)
+        .fetch_optional(pool)
+        .await
+}
+
+pub async fn credentials(pool: &SqlitePool) -> sqlx::Result<Vec<Credential>> {
+    sqlx::query_as("SELECT * FROM credentials ORDER BY harness")
+        .fetch_all(pool)
+        .await
+}
+
+/// Replaces whatever the harness had.
+pub async fn set_credential(
+    pool: &SqlitePool,
+    harness: &str,
+    kind: &str,
+    secret: &str,
+    now: i64,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO credentials (harness, kind, secret, updated_at) VALUES (?, ?, ?, ?) \
+         ON CONFLICT (harness) DO UPDATE SET kind = excluded.kind, secret = excluded.secret, \
+         updated_at = excluded.updated_at",
+    )
+    .bind(harness)
+    .bind(kind)
+    .bind(secret)
+    .bind(now)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub async fn delete_credential(pool: &SqlitePool, harness: &str) -> sqlx::Result<()> {
+    sqlx::query("DELETE FROM credentials WHERE harness = ?")
+        .bind(harness)
+        .execute(pool)
+        .await?;
+    Ok(())
+}

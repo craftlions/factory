@@ -3,7 +3,7 @@
 //! harness's session file, copied out of the session's disk.
 
 use crate::{
-    collector, db,
+    collector, credentials, db,
     guest_protocol::GuestFile,
     harness::{self, ChatEvent, ChatItem, Command, Harness, LaunchSpec, ModelInfo, Resume, Update},
     microvm::{self, Microvm, VmRequest, proxy},
@@ -85,6 +85,9 @@ enum Refusal {
     Removed(String),
     NotImplemented(String),
 }
+
+/// Files and secret environment variables for a harness's guest.
+type GuestSetup = (Vec<GuestFile>, Vec<(String, String)>);
 
 /// What one start of a harness needs, owned so it can move into a task.
 struct Launch {
@@ -198,9 +201,28 @@ impl Sessions {
             .cloned()
     }
 
-    /// The harness's configuration files for the guest. Credentials are copied
-    /// in, so code running in the guest can read them.
-    fn guest_files(&self) -> io::Result<Vec<GuestFile>> {
+    /// Where pi's credentials go, and whether they are there.
+    pub fn pi_auth(&self) -> (PathBuf, bool) {
+        let auth = self.pi_config.join("auth.json");
+        let present = auth.is_file();
+        (auth, present)
+    }
+
+    /// What the harness needs in the guest besides its command line: files and
+    /// secret environment variables. Credentials are copied in, so code running
+    /// in the guest can read them.
+    async fn guest_setup(&self, harness_id: &str) -> io::Result<GuestSetup> {
+        if harness_id == "pi" {
+            return Ok((self.pi_files()?, Vec::new()));
+        }
+        let env = credentials::guest_env(&self.pool, harness_id)
+            .await
+            .map_err(|message| io::Error::new(io::ErrorKind::NotFound, message))?;
+        Ok((Vec::new(), env.unwrap_or_default()))
+    }
+
+    /// pi's configuration files, which hold its credentials.
+    fn pi_files(&self) -> io::Result<Vec<GuestFile>> {
         let auth = self.pi_config.join("auth.json");
         if !auth.is_file() {
             return Err(io::Error::new(
@@ -272,11 +294,13 @@ impl Sessions {
         let dir = self.microvm.assets_dir.join("catalog");
         tokio::fs::create_dir_all(&dir).await?;
         let (notices, _) = mpsc::unbounded_channel();
+        let (files, env) = self.guest_setup(harness_id).await?;
         let request = VmRequest {
             dir: &dir,
             invocation,
             tools: harness_id,
-            files: self.guest_files()?,
+            files,
+            env,
             hosts: Vec::new(),
             notices,
         };
@@ -349,7 +373,9 @@ impl Sessions {
                 "provider, model and reasoning are required".into(),
             ));
         }
-        self.guest_files().map_err(CreateError::Launch)?;
+        self.guest_setup(&request.harness)
+            .await
+            .map_err(CreateError::Launch)?;
         let hosts = self
             .api_hosts(&request.harness, &model.provider, &model.id)
             .await
@@ -440,8 +466,8 @@ impl Sessions {
         let _ = notices.send("Starting the session's microvm.".into());
 
         let dir = self.dir(&id);
-        let files = match self.guest_files() {
-            Ok(files) => files,
+        let (files, env) = match self.guest_setup(&launch.harness).await {
+            Ok(setup) => setup,
             Err(error) => {
                 let _ = updates.send(Update::Exited {
                     failure: Some(error.to_string()),
@@ -454,6 +480,7 @@ impl Sessions {
             invocation: &invocation,
             tools: &launch.harness,
             files,
+            env,
             hosts: launch.hosts.clone(),
             notices,
         };
