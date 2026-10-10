@@ -19,7 +19,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
@@ -31,6 +31,8 @@ const PROTOCOL_VERSION: u64 = 1;
 /// An extension that adds a message to the running turn instead of queueing a
 /// new one. Agents advertise it in `_meta.steering` of their initialize answer.
 const STEER_METHOD: &str = "_session/steering";
+/// How long an agent may take to open its session before it counts as stuck.
+const OPEN_TIMEOUT: Duration = Duration::from_secs(120);
 
 /// What sets one ACP agent apart.
 pub struct Profile {
@@ -513,6 +515,22 @@ fn emit(updates: &mpsc::UnboundedSender<Update>, events: Vec<ChatEvent>) {
     }
 }
 
+/// Shows a user's message as soon as it arrives, even while the agent is
+/// still opening its session; ACP agents do not echo prompts back.
+fn echo(updates: &mpsc::UnboundedSender<Update>, command: &Command) {
+    if let Command::Prompt(text) = command {
+        emit(
+            updates,
+            vec![ChatEvent::MessageEnd {
+                item: ChatItem::User {
+                    text: text.clone(),
+                    ts: now(),
+                },
+            }],
+        );
+    }
+}
+
 /// Grants a permission request with the first option that allows once, else
 /// one that allows always. `None` when the agent offered no way to allow.
 fn grant(options: &Value) -> Option<Value> {
@@ -652,15 +670,6 @@ impl Client {
     fn handle(self: &Arc<Self>, command: Command) {
         match command {
             Command::Prompt(text) => {
-                emit(
-                    &self.updates,
-                    vec![ChatEvent::MessageEnd {
-                        item: ChatItem::User {
-                            text: text.clone(),
-                            ts: now(),
-                        },
-                    }],
-                );
                 let busy = self.turn.lock().expect("turn lock").prompts > 0;
                 if busy && self.session.steering {
                     self.steer(text);
@@ -796,20 +805,38 @@ pub fn attach(
         },
     };
     let session_updates = updates.clone();
+    // Why the session never opened, which makes the whole run a failure.
+    let not_opened = Arc::new(Mutex::new(None::<String>));
+    let opening_failure = not_opened.clone();
     tokio::spawn(async move {
+        emit(
+            &session_updates,
+            vec![ChatEvent::Notice {
+                text: format!("{} is opening its session.", profile.name),
+            }],
+        );
         // A stop ends the session even while it is still opening; messages
         // sent meanwhile wait for it.
         let mut out = Vec::new();
         let mut early = Vec::new();
         let opened = {
-            let opening = open_session(&connection, profile, &start, &mut out);
+            let opening = tokio::time::timeout(
+                OPEN_TIMEOUT,
+                open_session(&connection, profile, &start, &mut out),
+            );
             tokio::pin!(opening);
             loop {
                 tokio::select! {
-                    opened = &mut opening => break Some(opened),
+                    opened = &mut opening => break Some(opened.unwrap_or_else(|_| Err(format!(
+                        "it did not open one within {} seconds",
+                        OPEN_TIMEOUT.as_secs()
+                    )))),
                     command = commands.recv() => match command {
                         Some(Command::Stop) | None => break None,
-                        Some(command) => early.push(command),
+                        Some(command) => {
+                            echo(&session_updates, &command);
+                            early.push(command);
+                        }
                     },
                 }
             }
@@ -835,15 +862,14 @@ pub fn attach(
                     if matches!(command, Command::Stop) {
                         break;
                     }
+                    echo(&client.updates, &command);
                     client.handle(command);
                 }
             }
-            Some(Err(error)) => emit(
-                &session_updates,
-                vec![ChatEvent::Notice {
-                    text: format!("{} did not start a session: {error}", profile.name),
-                }],
-            ),
+            Some(Err(error)) => {
+                *opening_failure.lock().expect("failure lock") =
+                    Some(format!("{} did not open a session: {error}", profile.name));
+            }
             None => {}
         }
         connection.close();
@@ -851,13 +877,18 @@ pub fn attach(
     });
 
     tokio::spawn(async move {
-        let failure = exited.await.unwrap_or_else(|_| {
+        let exit = exited.await.unwrap_or_else(|_| {
             Some(format!(
                 "the environment running {} went away",
                 profile.name
             ))
         });
         let _ = reader.await;
+        let opened = not_opened.lock().expect("failure lock").take();
+        let failure = match (opened, exit) {
+            (Some(opened), Some(exit)) => Some(format!("{opened}. {exit}")),
+            (opened, exit) => opened.or(exit),
+        };
         let _ = updates.send(Update::Exited { failure });
     });
 }
