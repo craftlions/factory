@@ -1,3 +1,4 @@
+mod catalog;
 mod collector;
 mod credentials;
 mod db;

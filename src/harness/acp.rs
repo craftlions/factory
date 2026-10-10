@@ -9,8 +9,7 @@
 //! harness brings its own [`super::TranscriptReader`].
 
 use super::{
-    Block, BlockKind, ChatEvent, ChatItem, Command, LaunchSpec, ModelInfo, Process, Query, Resume,
-    Update, clip,
+    Block, BlockKind, ChatEvent, ChatItem, Command, LaunchSpec, Process, Resume, Update, clip,
 };
 use serde_json::{Value, json};
 use std::{
@@ -20,7 +19,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{SystemTime, UNIX_EPOCH},
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncWrite, AsyncWriteExt, BufReader},
@@ -29,23 +28,14 @@ use tokio::{
 };
 
 const PROTOCOL_VERSION: u64 = 1;
-/// Starting the agent and a session can take a while in a fresh vm.
-const QUERY_TIMEOUT: Duration = Duration::from_secs(60);
 /// An extension that adds a message to the running turn instead of queueing a
 /// new one. Agents advertise it in `_meta.steering` of their initialize answer.
 const STEER_METHOD: &str = "_session/steering";
-/// Catalog questions open a session that is never prompted; any existing
-/// directory of the guest will do.
-const CATALOG_CWD: &str = "/tmp";
 
 /// What sets one ACP agent apart.
 pub struct Profile {
     /// The agent's name in notices.
     pub name: &'static str,
-    /// ACP has no providers, so every model of the agent is reported under this one.
-    pub provider: &'static str,
-    /// Where the agent's models are served: the host a session may reach.
-    pub base_url: &'static str,
     /// The session mode that runs tools without asking, when the agent has one.
     pub unattended_mode: Option<&'static str>,
     /// The agent's transcript of a session inside the guest, from the state
@@ -870,115 +860,4 @@ pub fn attach(
         let _ = reader.await;
         let _ = updates.send(Update::Exited { failure });
     });
-}
-
-// ---- catalog queries ----
-
-/// Opens a throwaway session, on `model` when given, and returns its config
-/// options. Then has the environment end the agent.
-async fn catalog_options(
-    profile: &Profile,
-    process: Process,
-    model: Option<&str>,
-) -> io::Result<Value> {
-    let Process {
-        stdin,
-        stdout,
-        stop,
-        exited,
-    } = process;
-    let (connection, reader) = connect(stdin, stdout, |connection: &Connection, message| {
-        if let Incoming::Request { id, .. } = message {
-            connection.refuse(&id, "the factory only asks about models");
-        }
-    });
-    let exchange = async {
-        connection
-            .request("initialize", client_capabilities())
-            .await?;
-        let session = connection
-            .request("session/new", json!({"cwd": CATALOG_CWD, "mcpServers": []}))
-            .await?;
-        let mut options = session["configOptions"].clone();
-        if let Some(model) = model {
-            let choice = option(&options, "model").ok_or("the agent offers no model choice")?;
-            if !values(choice).iter().any(|(offered, _)| offered == model) {
-                return Err(format!("{model} is not one of its models"));
-            }
-            let params = json!({
-                "sessionId": session["sessionId"], "configId": choice["id"], "value": model,
-            });
-            let answer = connection
-                .request("session/set_config_option", params)
-                .await?;
-            options = answer["configOptions"].clone();
-        }
-        Ok::<_, String>(options)
-    };
-    let result = tokio::time::timeout(QUERY_TIMEOUT, exchange)
-        .await
-        .unwrap_or_else(|_| Err("it did not answer in time".into()));
-    connection.close();
-    let _ = stop.send(());
-    let _ = exited.await;
-    let _ = reader.await;
-    result.map_err(|error| io::Error::other(format!("{}: {error}", profile.name)))
-}
-
-/// The models the agent offers in a new session.
-pub fn models(profile: &'static Profile, process: Process) -> Query<'static, Vec<ModelInfo>> {
-    Box::pin(async move {
-        let options = catalog_options(profile, process, None).await?;
-        let reasoning = option(&options, "thought_level").is_some();
-        Ok(option(&options, "model")
-            .map(values)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(id, name)| ModelInfo {
-                provider: profile.provider.to_owned(),
-                id,
-                name,
-                context_window: None,
-                reasoning,
-                base_url: Some(profile.base_url.to_owned()),
-            })
-            .collect())
-    })
-}
-
-/// The reasoning levels the agent offers for `model`. An agent without levels
-/// for it reports the single level "default", which leaves it to the agent.
-pub fn reasoning_levels(
-    profile: &'static Profile,
-    process: Process,
-    provider: String,
-    model: String,
-) -> Query<'static, Vec<String>> {
-    Box::pin(async move {
-        if provider != profile.provider {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("{} has no provider {provider}", profile.name),
-            ));
-        }
-        let options = catalog_options(profile, process, Some(&model)).await?;
-        let active = option(&options, "model").map(|choice| &choice["currentValue"]);
-        if active.and_then(Value::as_str) != Some(model.as_str()) {
-            return Err(io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("{} does not offer {model}", profile.name),
-            ));
-        }
-        let levels: Vec<String> = option(&options, "thought_level")
-            .map(values)
-            .unwrap_or_default()
-            .into_iter()
-            .map(|(value, _)| value)
-            .collect();
-        Ok(if levels.is_empty() {
-            vec!["default".into()]
-        } else {
-            levels
-        })
-    })
 }

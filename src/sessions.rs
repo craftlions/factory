@@ -3,6 +3,7 @@
 //! harness's session file, copied out of the session's disk.
 
 use crate::{
+    catalog::Catalog,
     collector, credentials, db,
     guest_protocol::GuestFile,
     harness::{self, ChatEvent, ChatItem, Command, Harness, LaunchSpec, ModelInfo, Resume, Update},
@@ -81,13 +82,16 @@ fn check_isolation(isolation: &str) -> Result<(), Refusal> {
     }
 }
 
+/// Harnesses sessions can be started with. pi is disabled for now; its ended
+/// sessions can still be read.
+fn startable(harness_id: &str) -> bool {
+    harness_id == "claude"
+}
+
 enum Refusal {
     Removed(String),
     NotImplemented(String),
 }
-
-/// Lines of setup output a failed catalog vm reports.
-const CATALOG_LOG_TAIL: usize = 15;
 
 /// Files and secret environment variables for a harness's guest.
 type GuestSetup = (Vec<GuestFile>, Vec<(String, String)>);
@@ -176,10 +180,7 @@ pub struct Sessions {
     /// pi's configuration and credentials, copied into every guest.
     pi_config: PathBuf,
     microvm: Microvm,
-    /// One catalog vm at a time: they share a disk.
-    catalog_vm: tokio::sync::Mutex<()>,
-    /// The last model list per harness, which knows each model's API host.
-    catalog: Mutex<HashMap<String, Vec<ModelInfo>>>,
+    catalog: Catalog,
     live: Mutex<HashMap<String, Arc<Live>>>,
 }
 
@@ -190,8 +191,7 @@ impl Sessions {
             root: data_dir.join("sessions"),
             pi_config: data_dir.join("pi").join("agent"),
             microvm,
-            catalog_vm: tokio::sync::Mutex::new(()),
-            catalog: Mutex::new(HashMap::new()),
+            catalog: Catalog::new(data_dir),
             live: Mutex::new(HashMap::new()),
         }
     }
@@ -259,118 +259,44 @@ impl Sessions {
         Ok(files)
     }
 
-    /// Asks the harness, in a throwaway vm, which models it can use.
+    /// The models of the harness, from its catalog. `None` for a harness
+    /// without one.
     pub async fn models(&self, harness_id: &str) -> Option<io::Result<Vec<ModelInfo>>> {
-        let adapter = harness::by_id(harness_id)?;
-        let result = async {
-            let invocation = adapter.catalog_invocation(None);
-            let process = self.catalog_process(harness_id, &invocation).await?;
-            adapter.models(process).await
-        }
-        .await;
-        if let Ok(models) = &result {
-            let mut catalog = self.catalog.lock().expect("catalog lock");
-            catalog.insert(harness_id.to_owned(), models.clone());
-        }
-        Some(result)
+        let source = harness::by_id(harness_id)?.catalog()?;
+        Some(self.catalog.models(&source).await)
     }
 
-    /// Asks the harness, in a throwaway vm, which reasoning levels a model has.
+    /// The reasoning levels of one model, from the harness's catalog.
     pub async fn reasoning_levels(
         &self,
         harness_id: &str,
         provider: &str,
         model: &str,
     ) -> Option<io::Result<Vec<String>>> {
-        let adapter = harness::by_id(harness_id)?;
-        Some(
-            async {
-                let invocation = adapter.catalog_invocation(Some((provider, model)));
-                let process = self.catalog_process(harness_id, &invocation).await?;
-                adapter
-                    .reasoning_levels(process, provider.to_owned(), model.to_owned())
-                    .await
-            }
-            .await,
-        )
+        let source = harness::by_id(harness_id)?.catalog()?;
+        if provider != source.provider {
+            return Some(Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{harness_id} has no provider {provider}"),
+            )));
+        }
+        Some(self.catalog.levels(&source, model).await)
     }
 
-    /// Catalog vms reuse one disk, so tools are only installed the first time.
-    async fn catalog_process(
-        &self,
-        harness_id: &str,
-        invocation: &harness::Invocation,
-    ) -> io::Result<harness::Process> {
-        let _one_at_a_time = self.catalog_vm.lock().await;
-        let dir = self.microvm.assets_dir.join("catalog");
-        tokio::fs::create_dir_all(&dir).await?;
-        // Nobody watches a catalog vm, so a failed start carries what setup
-        // and the proxy said.
-        let (notices, mut said) = mpsc::unbounded_channel();
-        let (files, env) = self.guest_setup(harness_id).await?;
-        let request = VmRequest {
-            dir: &dir,
-            invocation,
-            tools: harness_id,
-            files,
-            env,
-            hosts: Vec::new(),
-            notices,
-        };
-        self.microvm.start(request).await.map_err(|error| {
-            let mut lines = Vec::new();
-            while let Ok(line) = said.try_recv() {
-                lines.push(line);
-            }
-            let tail = &lines[lines.len().saturating_sub(CATALOG_LOG_TAIL)..];
-            if tail.is_empty() {
-                error
-            } else {
-                io::Error::new(error.kind(), format!("{error}. {}", tail.join(" | ")))
-            }
-        })
-    }
-
-    /// The API host of a model, from the harness's own model list.
-    async fn api_hosts(
-        &self,
-        harness_id: &str,
-        provider: &str,
-        model: &str,
-    ) -> io::Result<Vec<String>> {
-        let find = |models: &[ModelInfo]| {
-            models
-                .iter()
-                .find(|m| m.provider == provider && m.id == model)
-                .map(|m| m.base_url.clone())
-        };
-        let cached = self
-            .catalog
-            .lock()
-            .expect("catalog lock")
-            .get(harness_id)
-            .and_then(|m| find(m));
-        let base_url = match cached {
-            Some(base_url) => base_url,
-            None => {
-                let models = self.models(harness_id).await.expect("the harness exists")?;
-                find(&models).ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::NotFound,
-                        format!("{harness_id} does not list {provider}/{model}"),
-                    )
-                })?
-            }
-        };
-        let host = base_url
-            .as_deref()
-            .and_then(proxy::host_of)
-            .ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::NotFound,
-                    format!("{harness_id} reports no API address for {provider}/{model}"),
-                )
-            })?;
+    /// The API host a session of the harness may reach.
+    fn api_hosts(&self, adapter: &dyn Harness, harness_id: &str) -> io::Result<Vec<String>> {
+        let source = adapter.catalog().ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{harness_id} has no model catalog"),
+            )
+        })?;
+        let host = proxy::host_of(source.base_url).ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!("{harness_id} has no API address"),
+            )
+        })?;
         Ok(vec![host])
     }
 
@@ -381,6 +307,12 @@ impl Sessions {
                 request.harness
             )));
         };
+        if !startable(&request.harness) {
+            return Err(CreateError::Unsupported(format!(
+                "The {} harness is disabled for now.",
+                request.harness
+            )));
+        }
         check_isolation(&request.isolation).map_err(|refusal| match refusal {
             Refusal::Removed(message) => CreateError::Invalid(message),
             Refusal::NotImplemented(message) => CreateError::Unsupported(message),
@@ -400,9 +332,19 @@ impl Sessions {
         self.guest_setup(&request.harness)
             .await
             .map_err(CreateError::Launch)?;
-        let hosts = self
-            .api_hosts(&request.harness, &model.provider, &model.id)
+        let levels = self
+            .reasoning_levels(&request.harness, &model.provider, &model.id)
             .await
+            .unwrap_or_else(|| Err(io::Error::other("the harness has no model catalog")))
+            .map_err(|error| CreateError::Invalid(error.to_string()))?;
+        if !levels.contains(&model.reasoning) {
+            return Err(CreateError::Invalid(format!(
+                "{} has no reasoning level {}",
+                model.id, model.reasoning
+            )));
+        }
+        let hosts = self
+            .api_hosts(adapter, &request.harness)
             .map_err(CreateError::Launch)?;
 
         let id = db::insert_session(&self.pool, &request, collector::now())
@@ -563,6 +505,12 @@ impl Sessions {
             .await
             .map_err(ResumeError::Database)?
             .ok_or(ResumeError::NotFound)?;
+        if !startable(&session.kind) {
+            return Err(ResumeError::Conflict(format!(
+                "the {} harness is disabled for now",
+                session.kind
+            )));
+        }
         let adapter = harness::by_id(&session.kind);
         let (Some(adapter), Some(provider), Some(model), Some(reasoning)) = (
             adapter,
@@ -586,8 +534,7 @@ impl Sessions {
             ));
         }
         let hosts = self
-            .api_hosts(&session.kind, provider, model)
-            .await
+            .api_hosts(adapter, &session.kind)
             .map_err(ResumeError::Launch)?;
         // The harness does not replay old messages, so the live state starts
         // from what its session file holds.

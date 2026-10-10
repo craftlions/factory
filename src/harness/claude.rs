@@ -4,7 +4,7 @@
 //! into its config directory, which is pointed at the harness state directory.
 
 use super::{
-    Block, ChatItem, Command, Harness, Invocation, LaunchSpec, ModelInfo, Process, Query,
+    Block, CatalogSource, ChatItem, Command, Harness, Invocation, LaunchSpec, Process,
     TranscriptReader, Update, acp, clip,
 };
 use serde_json::Value;
@@ -20,8 +20,6 @@ pub struct Claude;
 
 static PROFILE: acp::Profile = acp::Profile {
     name: "Claude Code",
-    provider: "anthropic",
-    base_url: "https://api.anthropic.com",
     // The microvm is the boundary, so tools run without asking. As root this
     // mode needs `IS_SANDBOX`; without it, permission requests are granted
     // one by one instead.
@@ -39,8 +37,8 @@ fn session_file(state_dir: &str, cwd: &str, session_id: &str) -> Option<String> 
     Some(format!("{state_dir}/projects/{project}/{session_id}.jsonl"))
 }
 
-fn invocation(config_dir: Option<&str>) -> Invocation {
-    let mut env = vec![
+fn invocation(spec: &LaunchSpec) -> Invocation {
+    let env = vec![
         // Update checks, telemetry and error reports would only be refused by
         // the proxy, which lets the model API through and nothing else.
         (
@@ -50,10 +48,14 @@ fn invocation(config_dir: Option<&str>) -> Invocation {
         // Guests run harnesses as root. This tells Claude Code it is in a
         // sandbox, where it allows skipping its permission prompts as root.
         ("IS_SANDBOX".to_owned(), "1".to_owned()),
+        ("CLAUDE_CONFIG_DIR".to_owned(), spec.state_dir.to_owned()),
+        // Claude Code's model choice offers its own aliases; this adds the
+        // catalog's full model id to them, so the session can be set to it.
+        (
+            "ANTHROPIC_CUSTOM_MODEL_OPTION".to_owned(),
+            spec.model.to_owned(),
+        ),
     ];
-    if let Some(dir) = config_dir {
-        env.push(("CLAUDE_CONFIG_DIR".into(), dir.into()));
-    }
     Invocation {
         program: "claude-agent-acp".into(),
         args: Vec::new(),
@@ -345,7 +347,7 @@ impl TranscriptReader for Claude {
 impl Harness for Claude {
     /// Model and reasoning level are chosen over ACP once the session is open.
     fn invocation(&self, spec: &LaunchSpec) -> Invocation {
-        invocation(Some(spec.state_dir))
+        invocation(spec)
     }
 
     fn attach(
@@ -358,20 +360,10 @@ impl Harness for Claude {
         acp::attach(&PROFILE, process, spec, commands, updates);
     }
 
-    fn catalog_invocation(&self, _model: Option<(&str, &str)>) -> Invocation {
-        invocation(None)
-    }
-
-    fn models(&self, process: Process) -> Query<'static, Vec<ModelInfo>> {
-        acp::models(&PROFILE, process)
-    }
-
-    fn reasoning_levels(
-        &self,
-        process: Process,
-        provider: String,
-        model: String,
-    ) -> Query<'static, Vec<String>> {
-        acp::reasoning_levels(&PROFILE, process, provider, model)
+    fn catalog(&self) -> Option<CatalogSource> {
+        Some(CatalogSource {
+            provider: "anthropic",
+            base_url: "https://api.anthropic.com",
+        })
     }
 }

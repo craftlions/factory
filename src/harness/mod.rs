@@ -10,7 +10,7 @@ pub mod pi;
 
 use serde::Serialize;
 use serde_json::Value;
-use std::{future::Future, io, path::Path, pin::Pin};
+use std::{io, path::Path};
 use tokio::{
     io::{AsyncRead, AsyncWrite},
     sync::{mpsc, oneshot},
@@ -193,7 +193,12 @@ pub struct ModelInfo {
     pub base_url: Option<String>,
 }
 
-pub type Query<'a, T> = Pin<Box<dyn Future<Output = io::Result<T>> + Send + 'a>>;
+/// A provider of the models.dev catalog, and the API all its models are
+/// served from: the host a session may reach.
+pub struct CatalogSource {
+    pub provider: &'static str,
+    pub base_url: &'static str,
+}
 
 /// Reads a harness's own session file back into chat items.
 pub trait TranscriptReader: Send + Sync {
@@ -217,18 +222,9 @@ pub trait Harness: TranscriptReader {
         updates: mpsc::UnboundedSender<Update>,
     );
 
-    /// A throwaway invocation for catalog questions. With a model, the harness
-    /// is started on that model so it can be asked about it.
-    fn catalog_invocation(&self, model: Option<(&str, &str)>) -> Invocation;
-    /// Models the harness can use right now, asked from the harness itself.
-    fn models(&self, process: Process) -> Query<'static, Vec<ModelInfo>>;
-    /// Reasoning levels the harness reports for the model `process` was started on.
-    fn reasoning_levels(
-        &self,
-        process: Process,
-        provider: String,
-        model: String,
-    ) -> Query<'static, Vec<String>>;
+    /// Where the harness's models are listed, if the factory has a catalog
+    /// for it. A harness never runs to answer catalog questions.
+    fn catalog(&self) -> Option<CatalogSource>;
 }
 
 pub fn by_id(id: &str) -> Option<&'static dyn Harness> {

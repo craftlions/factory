@@ -3,8 +3,8 @@
 //! session file pi writes itself (docs/session-format.md).
 
 use super::{
-    Block, BlockKind, ChatEvent, ChatItem, Command, Harness, Invocation, LaunchSpec, ModelInfo,
-    Process, Query, Resume, TranscriptReader, Update, clip,
+    Block, BlockKind, CatalogSource, ChatEvent, ChatItem, Command, Harness, Invocation, LaunchSpec,
+    Process, Resume, TranscriptReader, Update, clip,
 };
 use serde_json::{Value, json};
 use std::{
@@ -15,14 +15,11 @@ use std::{
         Arc,
         atomic::{AtomicBool, Ordering},
     },
-    time::Duration,
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncWrite, AsyncWriteExt, BufReader},
     sync::mpsc,
 };
-
-const QUERY_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct Pi;
 
@@ -433,124 +430,9 @@ impl Harness for Pi {
         });
     }
 
-    fn catalog_invocation(&self, model: Option<(&str, &str)>) -> Invocation {
-        // Offline: a catalog question must not wait on startup network calls.
-        match model {
-            Some((provider, id)) => invocation(&[
-                "--no-session",
-                "--offline",
-                "--provider",
-                provider,
-                "--model",
-                id,
-            ]),
-            None => invocation(&["--no-session", "--offline"]),
-        }
+    fn catalog(&self) -> Option<CatalogSource> {
+        None
     }
-
-    fn models(&self, process: Process) -> Query<'static, Vec<ModelInfo>> {
-        Box::pin(async move {
-            let data = query(process, &["get_available_models"]).await?;
-            Ok(data[0]["models"]
-                .as_array()
-                .map(|models| {
-                    models
-                        .iter()
-                        .filter_map(|model| {
-                            let id = model["id"].as_str()?;
-                            Some(ModelInfo {
-                                provider: model["provider"].as_str()?.to_owned(),
-                                id: id.to_owned(),
-                                name: model["name"].as_str().unwrap_or(id).to_owned(),
-                                context_window: model["contextWindow"].as_u64(),
-                                reasoning: model["reasoning"].as_bool().unwrap_or(false),
-                                base_url: model["baseUrl"].as_str().map(str::to_owned),
-                            })
-                        })
-                        .collect()
-                })
-                .unwrap_or_default())
-        })
-    }
-
-    fn reasoning_levels(
-        &self,
-        process: Process,
-        provider: String,
-        model: String,
-    ) -> Query<'static, Vec<String>> {
-        Box::pin(async move {
-            let data = query(process, &["get_state", "get_available_thinking_levels"]).await?;
-            if let Some(mismatch) = model_mismatch(&data[0], &provider, &model) {
-                return Err(io::Error::new(io::ErrorKind::NotFound, mismatch));
-            }
-            Ok(data[1]["levels"]
-                .as_array()
-                .map(|levels| {
-                    levels
-                        .iter()
-                        .filter_map(|l| l.as_str().map(str::to_owned))
-                        .collect()
-                })
-                .unwrap_or_default())
-        })
-    }
-}
-
-// ---- catalog queries ----
-
-/// Sends the requests to a throwaway pi and returns each response's `data` in
-/// the same order, then has the environment end the process.
-async fn query(process: Process, requests: &[&str]) -> io::Result<Vec<Value>> {
-    let Process {
-        mut stdin,
-        stdout,
-        stop,
-        exited,
-    } = process;
-    let exchange = async {
-        for (id, request) in requests.iter().enumerate() {
-            write_line(
-                &mut stdin,
-                &json!({"id": id.to_string(), "type": request}).to_string(),
-            )
-            .await?;
-        }
-        let mut answers = vec![None; requests.len()];
-        let mut lines = BufReader::new(stdout).lines();
-        while answers.iter().any(Option::is_none) {
-            let Some(line) = lines.next_line().await? else {
-                return Err(io::Error::other("pi exited before answering"));
-            };
-            let Ok(record) = serde_json::from_str::<Value>(&line) else {
-                continue;
-            };
-            let slot = record["id"]
-                .as_str()
-                .and_then(|id| id.parse::<usize>().ok());
-            let (Some(slot), true) = (slot, record["type"] == "response") else {
-                continue;
-            };
-            if record["success"] != true {
-                return Err(io::Error::other(
-                    record["error"]
-                        .as_str()
-                        .unwrap_or("pi reported an error")
-                        .to_owned(),
-                ));
-            }
-            if let Some(answer) = answers.get_mut(slot) {
-                *answer = Some(record["data"].clone());
-            }
-        }
-        Ok(answers.into_iter().flatten().collect())
-    };
-    let result = tokio::time::timeout(QUERY_TIMEOUT, exchange)
-        .await
-        .unwrap_or_else(|_| Err(io::Error::other("pi did not answer in time")));
-    let _ = stop.send(());
-    let _ = exited.await;
-    result
 }
 
 /// `--model` is a pattern: pi may resolve it to a different model than the one
