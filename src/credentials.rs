@@ -13,6 +13,8 @@ const MAX_SECRET: usize = 4096;
 pub struct Kind {
     pub id: &'static str,
     pub name: &'static str,
+    /// Where to get one.
+    pub hint: &'static str,
     /// The environment variable the harness reads it from.
     #[serde(skip)]
     pub variable: &'static str,
@@ -33,11 +35,13 @@ pub const HARNESSES: &[Harness] = &[Harness {
         Kind {
             id: "api_key",
             name: "Anthropic API key",
+            hint: "Create one in the Claude Console. Usage is billed to its organization.",
             variable: "ANTHROPIC_API_KEY",
         },
         Kind {
             id: "oauth_token",
             name: "Claude subscription token",
+            hint: "Run `claude setup-token` where you are signed in to Claude. The token lasts a year.",
             variable: "CLAUDE_CODE_OAUTH_TOKEN",
         },
     ],

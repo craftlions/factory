@@ -5,6 +5,7 @@ import { NewSessionPage } from './pages/NewSession';
 import { OverviewPage } from './pages/Overview';
 import { SessionPage } from './pages/Session';
 import { SessionsPage } from './pages/Sessions';
+import { SettingsPage } from './pages/Settings';
 import { Link, usePath } from './router';
 import { useDashboard, type Connection, type Dashboard } from './useDashboard';
 import './style.css';
@@ -21,6 +22,7 @@ const PAGES: { path: string; title: string; hidden?: boolean; render: (dashboard
   { path: '/sessions', title: 'Sessions', render: (d) => <SessionsPage sessions={d.sessions} samples={d.samples} /> },
   { path: '/sessions/new', title: 'New session', hidden: true, render: () => <NewSessionPage /> },
   { path: '/host', title: 'Host', render: (d) => <HostPage overview={d.overview} samples={d.samples} /> },
+  { path: '/settings', title: 'Settings', render: () => <SettingsPage /> },
 ];
 
 function App() {

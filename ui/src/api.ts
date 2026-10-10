@@ -59,6 +59,31 @@ async function postJson<T>(url: string, body: unknown): Promise<T | null> {
   return parsed;
 }
 
+export interface CredentialKind { id: string; name: string; hint: string }
+
+/** A harness whose sign-in the settings manage. The secret itself is never sent back. */
+export interface HarnessCredentials {
+  id: string;
+  name: string;
+  kinds: CredentialKind[];
+  stored: { kind: string; hint: string; updated_at: number } | null;
+}
+
+export interface Settings {
+  credentials: HarnessCredentials[];
+  /** pi reads its own credentials file, which is placed by hand. */
+  pi_auth: { path: string; present: boolean };
+}
+
+export const fetchSettings = (signal: AbortSignal) => getJsonOrError<Settings>('/api/settings', signal);
+export const saveCredential = (harness: string, kind: string, secret: string) =>
+  postJson(`/api/settings/credentials/${harness}`, { kind, secret });
+export async function removeCredential(harness: string): Promise<void> {
+  const url = `/api/settings/credentials/${harness}`;
+  const response = await fetch(url, { method: 'DELETE' });
+  if (!response.ok) throw new Error(`${url} responded ${response.status}`);
+}
+
 export async function createSession(request: unknown): Promise<string> {
   const created = await postJson<{ id: string }>('/api/sessions', request);
   return created!.id;
