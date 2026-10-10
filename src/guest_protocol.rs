@@ -29,19 +29,8 @@ pub struct Spec {
     pub harness: Vec<String>,
     /// Working directory for setup and harness; created if missing.
     pub cwd: String,
-    /// Setup and harness run as this user, never as root.
-    pub user: GuestUser,
     /// Local TCP port the guest agent forwards to the factory's proxy.
     pub proxy_port: u16,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct GuestUser {
-    pub name: String,
-    pub uid: u32,
-    pub gid: u32,
-    /// Directories handed to the user, with everything in them, before setup.
-    pub owns: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

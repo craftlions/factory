@@ -11,8 +11,7 @@ pub mod proxy;
 
 use crate::{
     guest_protocol::{
-        CONTROL_PORT, GuestEvent, GuestFile, GuestUser, HostMessage, PROXY_PORT, Phase, STDIO_PORT,
-        Spec,
+        CONTROL_PORT, GuestEvent, GuestFile, HostMessage, PROXY_PORT, Phase, STDIO_PORT, Spec,
     },
     harness::{Invocation, Process},
 };
@@ -38,10 +37,6 @@ const BOOT_TIMEOUT: Duration = Duration::from_secs(60);
 const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(15);
 const SESSION_DISK_SIZE: u64 = 16 * 1024 * 1024 * 1024;
 const LOG_TAIL: usize = 20;
-/// Setup and harness run as this user inside the guest. Harnesses refuse to
-/// skip their permission prompts as root, and nothing they do needs root.
-const GUEST_USER: &str = "factory";
-const GUEST_UID: u32 = 1000;
 /// Where the tools drive is mounted inside the guest.
 const TOOLS_MOUNT: &str = "/opt/factory";
 
@@ -140,8 +135,6 @@ impl Microvm {
         let ca_bundle = format!("{TOOLS_MOUNT}/{}", assets::CA_BUNDLE);
         let mut env: BTreeMap<String, String> = [
             ("HOME", home.clone()),
-            ("USER", GUEST_USER.into()),
-            ("LOGNAME", GUEST_USER.into()),
             ("PATH", format!("{home}/.local/share/mise/shims:{TOOLS_MOUNT}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")),
             ("LANG", "C.UTF-8".into()),
             ("TERM", "dumb".into()),
@@ -187,12 +180,6 @@ impl Microvm {
             setup: self.setup.clone(),
             harness,
             cwd: self.workspace(),
-            user: GuestUser {
-                name: GUEST_USER.into(),
-                uid: GUEST_UID,
-                gid: GUEST_UID,
-                owns: vec![self.guest_root.clone()],
-            },
             proxy_port: self.guest_proxy_port,
         }
     }
