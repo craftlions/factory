@@ -22,8 +22,9 @@ static PROFILE: acp::Profile = acp::Profile {
     name: "Claude Code",
     provider: "anthropic",
     base_url: "https://api.anthropic.com",
-    // The guest is the boundary, so tools run without asking. Claude Code
-    // refuses this mode as root, which guests are not.
+    // The microvm is the boundary, so tools run without asking. As root this
+    // mode needs `IS_SANDBOX`; without it, permission requests are granted
+    // one by one instead.
     unattended_mode: Some("bypassPermissions"),
     session_file,
 };
@@ -39,12 +40,17 @@ fn session_file(state_dir: &str, cwd: &str, session_id: &str) -> Option<String> 
 }
 
 fn invocation(config_dir: Option<&str>) -> Invocation {
-    // Update checks, telemetry and error reports would only be refused by the
-    // proxy, which lets the model API through and nothing else.
-    let mut env = vec![(
-        "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".to_owned(),
-        "1".to_owned(),
-    )];
+    let mut env = vec![
+        // Update checks, telemetry and error reports would only be refused by
+        // the proxy, which lets the model API through and nothing else.
+        (
+            "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC".to_owned(),
+            "1".to_owned(),
+        ),
+        // Guests run harnesses as root. This tells Claude Code it is in a
+        // sandbox, where it allows skipping its permission prompts as root.
+        ("IS_SANDBOX".to_owned(), "1".to_owned()),
+    ];
     if let Some(dir) = config_dir {
         env.push(("CLAUDE_CONFIG_DIR".into(), dir.into()));
     }
