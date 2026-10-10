@@ -1,5 +1,5 @@
 [tools]
-rust = "latest"
+rust = { version = "latest", components = "rust-src,rust-analyzer,clippy,rustfmt", targets = "x86_64-unknown-linux-musl" }
 zig = "latest"
 node = "26.11.1"
 watchexec = "2.8.0"
