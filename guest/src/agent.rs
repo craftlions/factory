@@ -2,13 +2,19 @@
 
 use crate::{
     pid1,
-    protocol::{CONTROL_PORT, GuestEvent, HostMessage, PROXY_PORT, Phase, STDIO_PORT, Spec},
+    protocol::{
+        CONTROL_PORT, GuestEvent, GuestUser, HostMessage, PROXY_PORT, Phase, STDIO_PORT, Spec,
+    },
 };
 use std::{
     fs,
     io::{self, BufRead, BufReader, Read, Write},
     net::{Shutdown, TcpListener},
-    os::unix::{fs::PermissionsExt, net::UnixStream},
+    os::unix::{
+        fs::{MetadataExt, PermissionsExt},
+        net::UnixStream,
+        process::CommandExt,
+    },
     path::Path,
     process::{Command, Stdio},
     sync::{Arc, Mutex},
@@ -92,7 +98,12 @@ fn command(argv: &[String], spec: &Spec) -> io::Result<Command> {
         .split_first()
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "empty command"))?;
     let mut command = Command::new(program);
-    command.args(args).envs(&spec.env).current_dir(&spec.cwd);
+    command
+        .args(args)
+        .envs(&spec.env)
+        .current_dir(&spec.cwd)
+        .uid(spec.user.uid)
+        .gid(spec.user.gid);
     Ok(command)
 }
 
@@ -188,6 +199,56 @@ fn write_files(spec: &Spec) -> io::Result<()> {
     Ok(())
 }
 
+/// Adds `line` to an account database unless an entry already has `id`.
+fn add_account(file: &str, id: u32, line: &str) -> io::Result<()> {
+    let existing = fs::read_to_string(file).unwrap_or_default();
+    let id = id.to_string();
+    if existing
+        .lines()
+        .any(|entry| entry.split(':').nth(2) == Some(id.as_str()))
+    {
+        return Ok(());
+    }
+    let mut file = fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(file)?;
+    if !existing.is_empty() && !existing.ends_with('\n') {
+        file.write_all(b"\n")?;
+    }
+    file.write_all(line.as_bytes())
+}
+
+/// Symbolic links are changed themselves and never followed.
+fn chown_tree(path: &Path, uid: u32, gid: u32) -> io::Result<()> {
+    let meta = fs::symlink_metadata(path)?;
+    if meta.uid() != uid || meta.gid() != gid {
+        std::os::unix::fs::lchown(path, Some(uid), Some(gid))?;
+    }
+    if meta.is_dir() {
+        for entry in fs::read_dir(path)? {
+            chown_tree(&entry?.path(), uid, gid)?;
+        }
+    }
+    Ok(())
+}
+
+/// Makes the user known to the system, so tools can look it up, and hands it
+/// its directories. A disk from before sessions ran unprivileged is root's.
+fn adopt(user: &GuestUser, home: &str) -> io::Result<()> {
+    let GuestUser { name, uid, gid, .. } = user;
+    add_account("/etc/group", *gid, &format!("{name}:x:{gid}:\n"))?;
+    add_account(
+        "/etc/passwd",
+        *uid,
+        &format!("{name}:x:{uid}:{gid}::{home}:/bin/sh\n"),
+    )?;
+    for dir in &user.owns {
+        chown_tree(Path::new(dir), *uid, *gid)?;
+    }
+    Ok(())
+}
+
 pub fn session() -> io::Result<()> {
     let stream = connect_with_retry(CONTROL_PORT)?;
     let mut control_reader = BufReader::new(stream.try_clone()?);
@@ -199,6 +260,7 @@ pub fn session() -> io::Result<()> {
         let spec: Spec = serde_json::from_str(&line)
             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         write_files(&spec)?;
+        adopt(&spec.user, spec.env.get("HOME").map_or("/", String::as_str))?;
 
         let listener = TcpListener::bind(("127.0.0.1", spec.proxy_port))?;
         thread::spawn(move || serve_proxy(listener));
