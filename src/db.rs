@@ -37,6 +37,7 @@ pub struct Session {
     pub reasoning: Option<String>,
     pub harness_session_id: Option<String>,
     pub harness_session_file: Option<String>,
+    pub network: Option<String>,
 }
 
 pub async fn open(path: &Path) -> sqlx::Result<SqlitePool> {
@@ -124,8 +125,8 @@ pub async fn insert_session(
         attempt += 1;
         let id = crate::ids::generate();
         let inserted = sqlx::query(
-            "INSERT INTO sessions (id, kind, status, started_at, isolation, workdir, provider, model, reasoning) \
-             VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?)",
+            "INSERT INTO sessions (id, kind, status, started_at, isolation, workdir, provider, model, reasoning, network) \
+             VALUES (?, ?, 'running', ?, ?, ?, ?, ?, ?, ?)",
         )
         .bind(&id)
         .bind(&request.harness)
@@ -135,6 +136,7 @@ pub async fn insert_session(
         .bind(&request.model.provider)
         .bind(&request.model.id)
         .bind(&request.model.reasoning)
+        .bind(serde_json::to_string(&request.network).ok())
         .execute(pool)
         .await;
         match inserted {

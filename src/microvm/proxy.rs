@@ -1,5 +1,6 @@
-//! The guest's only way out: an HTTP CONNECT proxy that reaches a fixed list
-//! of hosts. The guest has no network device, so nothing can go around it.
+//! The guest's only way out: an HTTP proxy that reaches a fixed list of hosts
+//! and, when the session allows it, the public internet. The guest has no
+//! network device, so nothing can go around it.
 
 use std::{
     io,
@@ -35,6 +36,39 @@ impl AllowList {
             Some(domain) => host == domain || host.ends_with(entry.as_str()),
             None => host == *entry,
         })
+    }
+}
+
+/// Where a guest may go beyond its allow-list.
+#[derive(Clone, Debug, Default)]
+pub enum Egress {
+    /// Nowhere: only allow-listed hosts, over TLS on port 443.
+    #[default]
+    Restricted,
+    /// Any public host on these ports, or on every port when `None`.
+    Public { ports: Option<Vec<u16>> },
+}
+
+impl Egress {
+    fn permits(&self, port: u16) -> bool {
+        match self {
+            Egress::Restricted => false,
+            Egress::Public { ports: None } => true,
+            Egress::Public { ports: Some(ports) } => ports.contains(&port),
+        }
+    }
+}
+
+/// What one guest's proxy lets through. Private addresses never are.
+#[derive(Debug)]
+pub struct Policy {
+    pub allow: AllowList,
+    pub egress: Egress,
+}
+
+impl Policy {
+    fn permits(&self, host: &str, port: u16) -> bool {
+        (port == 443 && self.allow.allows(host)) || self.egress.permits(port)
     }
 }
 
@@ -74,13 +108,63 @@ fn is_public(ip: IpAddr) -> bool {
     }
 }
 
-fn parse_connect(head: &str) -> Option<(String, u16)> {
-    let mut parts = head.lines().next()?.split_whitespace();
-    if !parts.next()?.eq_ignore_ascii_case("CONNECT") {
-        return None;
+/// Where the guest wants to go, from the head of its proxy request.
+enum Target {
+    /// `CONNECT host:port`: a tunnel, usually for TLS.
+    Tunnel { host: String, port: u16 },
+    /// A plain HTTP request in absolute form, `GET http://host/path`. `head`
+    /// is the request rewritten for the origin server.
+    Forward {
+        host: String,
+        port: u16,
+        head: String,
+    },
+}
+
+fn split_authority(authority: &str, default_port: u16) -> Option<(String, u16)> {
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) if !port.contains(']') => (host, port.parse().ok()?),
+        _ => (authority, default_port),
+    };
+    let host = host.trim_matches(['[', ']']);
+    (!host.is_empty()).then(|| (host.to_owned(), port))
+}
+
+fn parse(head: &str) -> Option<Target> {
+    let mut lines = head.split("\r\n");
+    let mut parts = lines.next()?.split_whitespace();
+    let (method, target, version) = (parts.next()?, parts.next()?, parts.next()?);
+    if method.eq_ignore_ascii_case("CONNECT") {
+        let (host, port) = split_authority(target, 443)?;
+        return Some(Target::Tunnel { host, port });
     }
-    let (host, port) = parts.next()?.rsplit_once(':')?;
-    Some((host.trim_matches(['[', ']']).to_owned(), port.parse().ok()?))
+    let rest = target.strip_prefix("http://")?;
+    let (authority, path) = rest.split_at(rest.find('/').unwrap_or(rest.len()));
+    let (host, port) = split_authority(authority, 80)?;
+    let path = if path.is_empty() { "/" } else { path };
+    // One request per connection keeps every request checked on its own.
+    let mut rewritten = format!("{method} {path} {version}\r\n");
+    for line in lines.filter(|line| !line.is_empty()) {
+        let name = line
+            .split(':')
+            .next()
+            .unwrap_or("")
+            .trim()
+            .to_ascii_lowercase();
+        if !matches!(
+            name.as_str(),
+            "connection" | "proxy-connection" | "proxy-authorization"
+        ) {
+            rewritten.push_str(line);
+            rewritten.push_str("\r\n");
+        }
+    }
+    rewritten.push_str("Connection: close\r\n\r\n");
+    Some(Target::Forward {
+        host,
+        port,
+        head: rewritten,
+    })
 }
 
 async fn refuse(client: &mut (impl AsyncWrite + Unpin), status: &str) -> io::Result<()> {
@@ -91,7 +175,7 @@ async fn refuse(client: &mut (impl AsyncWrite + Unpin), status: &str) -> io::Res
 /// Serves one proxied connection. Refusals are reported through `notices`.
 pub async fn serve(
     mut client: impl AsyncRead + AsyncWrite + Unpin,
-    allow: Arc<AllowList>,
+    policy: Arc<Policy>,
     notices: mpsc::UnboundedSender<String>,
 ) -> io::Result<()> {
     let mut head = Vec::new();
@@ -102,11 +186,21 @@ pub async fn serve(
         }
         head.push(byte[0]);
     }
-    let Some((host, port)) = parse_connect(&String::from_utf8_lossy(&head)) else {
-        let _ = notices.send("Blocked a plain HTTP request from the session.".into());
+    let Some(target) = parse(&String::from_utf8_lossy(&head)) else {
+        let _ = notices
+            .send("Blocked a request from the session that the proxy does not understand.".into());
         return refuse(&mut client, "405 Method Not Allowed").await;
     };
-    if port != 443 || !allow.allows(&host) {
+    let (host, port, forward) = match target {
+        Target::Tunnel { host, port } => (host, port, None),
+        Target::Forward { host, port, head } => (host, port, Some(head)),
+    };
+    let permitted = match &forward {
+        // The allow-list is for TLS; plain HTTP needs public egress.
+        None => policy.permits(&host, port),
+        Some(_) => policy.egress.permits(port),
+    };
+    if !permitted {
         let _ = notices.send(format!(
             "Blocked a connection from the session to {host}:{port}."
         ));
@@ -128,9 +222,14 @@ pub async fn serve(
             return refuse(&mut client, "502 Bad Gateway").await;
         }
     };
-    client
-        .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
-        .await?;
+    match forward {
+        Some(head) => upstream.write_all(head.as_bytes()).await?,
+        None => {
+            client
+                .write_all(b"HTTP/1.1 200 Connection established\r\n\r\n")
+                .await?
+        }
+    }
     tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
     Ok(())
 }

@@ -7,7 +7,10 @@ use crate::{
     collector, credentials, db,
     guest_protocol::GuestFile,
     harness::{self, ChatEvent, ChatItem, Command, Harness, LaunchSpec, ModelInfo, Resume, Update},
-    microvm::{Microvm, VmRequest, proxy},
+    microvm::{
+        Microvm, VmRequest,
+        proxy::{self, Egress},
+    },
 };
 use serde::{Deserialize, Serialize};
 use sqlx::SqlitePool;
@@ -25,6 +28,48 @@ pub struct CreateRequest {
     pub isolation: String,
     pub workdir: Workdir,
     pub model: ModelChoice,
+    #[serde(default)]
+    pub network: Network,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Access {
+    /// The model API only.
+    #[default]
+    Restricted,
+    /// Also any public host, on the chosen ports.
+    Public,
+}
+
+/// What a session may reach besides the model API. Private addresses never are.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+pub struct Network {
+    pub access: Access,
+    /// Ports on public hosts; `None` allows every port.
+    #[serde(default)]
+    pub ports: Option<Vec<u16>>,
+}
+
+impl Network {
+    fn check(&self) -> Result<(), String> {
+        match (&self.access, &self.ports) {
+            (Access::Public, Some(ports)) if ports.is_empty() => {
+                Err("public network access needs at least one port".into())
+            }
+            (_, Some(ports)) if ports.contains(&0) => Err("port 0 is not a port".into()),
+            _ => Ok(()),
+        }
+    }
+
+    fn egress(&self) -> Egress {
+        match self.access {
+            Access::Restricted => Egress::Restricted,
+            Access::Public => Egress::Public {
+                ports: self.ports.clone(),
+            },
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -108,6 +153,7 @@ struct Launch {
     resume: Option<Recorded>,
     /// API hosts the harness may reach.
     hosts: Vec<String>,
+    egress: Egress,
 }
 
 /// What the harness reported about its session. Rows from before harnesses
@@ -322,6 +368,7 @@ impl Sessions {
                 "provider, model and reasoning are required".into(),
             ));
         }
+        request.network.check().map_err(CreateError::Invalid)?;
         self.guest_setup(&request.harness)
             .await
             .map_err(CreateError::Launch)?;
@@ -357,6 +404,7 @@ impl Sessions {
             reasoning: model.reasoning.clone(),
             resume: None,
             hosts,
+            egress: request.network.egress(),
         };
         self.attach(&id, launch, Vec::new());
         Ok(id)
@@ -446,6 +494,7 @@ impl Sessions {
             files,
             env,
             hosts: launch.hosts.clone(),
+            egress: launch.egress.clone(),
             notices,
         };
 
@@ -554,6 +603,12 @@ impl Sessions {
                 file: session.harness_session_file.clone(),
             }),
             hosts,
+            egress: session
+                .network
+                .as_deref()
+                .and_then(|network| serde_json::from_str::<Network>(network).ok())
+                .unwrap_or_default()
+                .egress(),
         };
         self.attach(id, launch, items);
         Ok(())

@@ -4,7 +4,8 @@
 //! filesystem with that disk layered on top, so whatever the session installs
 //! or writes stays on its disk. The guest has no network device. Its agent
 //! reaches the factory over vsock, which carries the harness's stdio and a
-//! proxy that only connects to an allow-list of hosts.
+//! proxy that connects to an allow-list of hosts, and to the public internet
+//! when the session allows it.
 
 pub mod assets;
 pub mod proxy;
@@ -15,7 +16,7 @@ use crate::{
     },
     harness::{Invocation, Process},
 };
-use proxy::AllowList;
+use proxy::{AllowList, Egress, Policy};
 use std::{
     collections::BTreeMap,
     env, io,
@@ -70,6 +71,8 @@ pub struct VmRequest<'a> {
     pub env: Vec<(String, String)>,
     /// Hosts the harness may reach, beyond what tool setup needs.
     pub hosts: Vec<String>,
+    /// Where else the session may go.
+    pub egress: Egress,
     /// Setup output, and everything the proxy refuses, as readable lines.
     pub notices: mpsc::UnboundedSender<String>,
 }
@@ -259,11 +262,14 @@ impl Microvm {
             .map(|host| (*host).to_owned())
             .collect();
         hosts.extend(request.hosts.iter().cloned());
-        let allow = Arc::new(AllowList::new(hosts));
+        let policy = Arc::new(Policy {
+            allow: AllowList::new(hosts),
+            egress: request.egress.clone(),
+        });
         let proxy_notices = request.notices.clone();
         let proxy_task = tokio::spawn(async move {
             while let Ok((stream, _)) = proxy_listener.accept().await {
-                tokio::spawn(proxy::serve(stream, allow.clone(), proxy_notices.clone()));
+                tokio::spawn(proxy::serve(stream, policy.clone(), proxy_notices.clone()));
             }
         });
         let proxy_guard = AbortOnDrop(proxy_task);
