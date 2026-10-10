@@ -86,6 +86,9 @@ enum Refusal {
     NotImplemented(String),
 }
 
+/// Lines of setup output a failed catalog vm reports.
+const CATALOG_LOG_TAIL: usize = 15;
+
 /// Files and secret environment variables for a harness's guest.
 type GuestSetup = (Vec<GuestFile>, Vec<(String, String)>);
 
@@ -301,7 +304,9 @@ impl Sessions {
         let _one_at_a_time = self.catalog_vm.lock().await;
         let dir = self.microvm.assets_dir.join("catalog");
         tokio::fs::create_dir_all(&dir).await?;
-        let (notices, _) = mpsc::unbounded_channel();
+        // Nobody watches a catalog vm, so a failed start carries what setup
+        // and the proxy said.
+        let (notices, mut said) = mpsc::unbounded_channel();
         let (files, env) = self.guest_setup(harness_id).await?;
         let request = VmRequest {
             dir: &dir,
@@ -312,7 +317,18 @@ impl Sessions {
             hosts: Vec::new(),
             notices,
         };
-        self.microvm.start(request).await
+        self.microvm.start(request).await.map_err(|error| {
+            let mut lines = Vec::new();
+            while let Ok(line) = said.try_recv() {
+                lines.push(line);
+            }
+            let tail = &lines[lines.len().saturating_sub(CATALOG_LOG_TAIL)..];
+            if tail.is_empty() {
+                error
+            } else {
+                io::Error::new(error.kind(), format!("{error}. {}", tail.join(" | ")))
+            }
+        })
     }
 
     /// The API host of a model, from the harness's own model list.
