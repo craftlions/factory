@@ -11,13 +11,18 @@ use std::{
     os::unix::{fs::PermissionsExt, net::UnixStream},
     path::Path,
     process::{Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread,
     time::{Duration, Instant},
 };
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const STOP_GRACE: Duration = Duration::from_secs(3);
+/// How often the harness's processes are reported to the session's log.
+const PROCESS_REPORT: Duration = Duration::from_secs(15);
 
 /// A vsock stream is a plain stream socket, so it is handled as one.
 fn connect(port: u32) -> io::Result<UnixStream> {
@@ -125,6 +130,67 @@ fn terminate(pid: u32) {
     unsafe { libc::kill(pid as libc::pid_t, libc::SIGKILL) };
 }
 
+/// The harness and its descendants: pid, name, state, and the kernel function
+/// a sleeping one waits in.
+fn processes(root: u32) -> Vec<String> {
+    let mut all = Vec::new();
+    for entry in fs::read_dir("/proc").into_iter().flatten().flatten() {
+        let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() else {
+            continue;
+        };
+        let Ok(stat) = fs::read_to_string(format!("/proc/{pid}/stat")) else {
+            continue;
+        };
+        // The name sits in parentheses and may contain anything.
+        let (Some(open), Some(close)) = (stat.find('('), stat.rfind(')')) else {
+            continue;
+        };
+        let mut rest = stat[close + 1..].split_whitespace();
+        let state = rest.next().unwrap_or("?").to_owned();
+        let parent: u32 = rest.next().and_then(|p| p.parse().ok()).unwrap_or(0);
+        all.push((pid, parent, state, stat[open + 1..close].to_owned()));
+    }
+    let mut tree = vec![root];
+    let mut next = 0;
+    while next < tree.len() {
+        let parent = tree[next];
+        tree.extend(all.iter().filter(|p| p.1 == parent).map(|p| p.0));
+        next += 1;
+    }
+    tree.iter()
+        .filter_map(|pid| all.iter().find(|p| p.0 == *pid))
+        .map(|(pid, _, state, name)| {
+            let waits = fs::read_to_string(format!("/proc/{pid}/wchan")).unwrap_or_default();
+            match waits.as_str() {
+                "" | "0" => format!("{pid} {name} {state}"),
+                waits => format!("{pid} {name} {state} in {waits}"),
+            }
+        })
+        .collect()
+}
+
+/// Reports the harness's processes until `done`, for a harness that seems
+/// stuck: what runs, and what each waits on.
+fn report_processes(root: u32, control: Control, done: Arc<AtomicBool>) {
+    thread::spawn(move || {
+        let mut since = Instant::now();
+        while !done.load(Ordering::Relaxed) {
+            thread::sleep(Duration::from_secs(1));
+            if since.elapsed() >= PROCESS_REPORT {
+                since = Instant::now();
+                let line = format!("processes: {}", processes(root).join(" | "));
+                send(
+                    &control,
+                    &GuestEvent::Log {
+                        phase: Phase::Harness,
+                        line,
+                    },
+                );
+            }
+        }
+    });
+}
+
 fn run_harness(
     spec: &Spec,
     control: &Control,
@@ -137,6 +203,8 @@ fn run_harness(
         .stderr(Stdio::piped())
         .spawn()?;
     let pid = child.id();
+    let done = Arc::new(AtomicBool::new(false));
+    report_processes(pid, control.clone(), done.clone());
     let stdin = child.stdin.take().expect("piped");
     let stdout = child.stdout.take().expect("piped");
     let err = forward_lines(
@@ -166,7 +234,9 @@ fn run_harness(
         terminate(pid);
     });
 
-    let status = child.wait()?;
+    let status = child.wait();
+    done.store(true, Ordering::Relaxed);
+    let status = status?;
     let _ = (out.join(), err.join());
     Ok(status.code())
 }
