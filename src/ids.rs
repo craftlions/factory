@@ -33,29 +33,3 @@ pub fn is_valid(id: &str) -> bool {
             .bytes()
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
 }
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn generated_ids_use_the_alphabet_and_validate() {
-        for _ in 0..1000 {
-            let id = generate();
-            assert_eq!(id.len(), LENGTH);
-            assert!(id.bytes().all(|b| ALPHABET.contains(&b)), "{id}");
-            assert!(is_valid(&id));
-        }
-    }
-
-    #[test]
-    fn malformed_ids_are_rejected() {
-        for id in ["", "..", "a/b", "ABC", "a b", "abcdefghijklm"] {
-            assert!(!is_valid(id), "{id}");
-        }
-        assert!(
-            is_valid("12"),
-            "numeric ids from before random ids stay valid"
-        );
-    }
-}

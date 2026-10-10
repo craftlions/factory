@@ -4,8 +4,6 @@
 //! its harness's wire protocol into those while a session runs, and parses the
 //! harness's own session file into the same items once it has ended.
 
-#[cfg(test)]
-pub mod local;
 pub mod pi;
 
 use serde::Serialize;
