@@ -174,7 +174,7 @@ export function NewSessionPage() {
   const setWorkdir = (patch: Partial<SessionDraft['workdir']>) =>
     setDraft((d) => ({ ...d, workdir: { ...d.workdir, ...patch } }));
 
-  // Three sources for the model step. A harness with a server catalog (pi) is
+  // Three sources for the model step. A harness with a server catalog (pi, Claude Code) is
   // asked through the factory for providers, models and per-model reasoning
   // levels. Elsewhere OpenRouter's public list is queried directly, and the
   // remaining providers share one generic list.
@@ -313,7 +313,7 @@ export function NewSessionPage() {
             {creating ? 'Starting…' : 'Create session'} <ArrowIcon />
           </button>
         </div>
-        {blocked && <p className="hint">{blocked} So far only Pi in a microvm with an empty directory can be created.</p>}
+        {blocked && <p className="hint">{blocked} So far only Pi and Claude Code in a microvm with an empty directory can be created.</p>}
         {createError && <p className="msg-error" role="alert">{createError}</p>}
       </div>
     );

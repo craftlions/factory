@@ -69,7 +69,8 @@ export const HARNESSES: Harness[] = [
     name: 'Claude Code',
     description: 'Anthropic’s coding agent.',
     isolation: ['harness'],
-    providers: ['anthropic'],
+    providers: [],
+    catalog: 'server',
   },
   {
     id: 'codex',
@@ -127,9 +128,12 @@ export function providerName(id: string): string {
   return PROVIDERS[id]?.name ?? id;
 }
 
+/** Harnesses the factory can start. */
+const IMPLEMENTED: HarnessId[] = ['pi', 'claude'];
+
 /** Why this draft cannot be created yet, or null when the factory can start it. */
 export function notCreatable(draft: SessionDraft): string | null {
-  if (draft.harness !== 'pi') return `The ${harnessOf(draft)?.name ?? 'chosen'} harness is not implemented yet.`;
+  if (!draft.harness || !IMPLEMENTED.includes(draft.harness)) return `The ${harnessOf(draft)?.name ?? 'chosen'} harness is not implemented yet.`;
   if (draft.isolation !== 'harness') return `${draft.isolation ? ISOLATION[draft.isolation].name : 'This isolation level'} is not implemented yet.`;
   if (draft.workdir.kind !== 'empty') return `The working directory kind “${WORKDIR[draft.workdir.kind].name}” is not implemented yet.`;
   return null;
