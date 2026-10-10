@@ -79,6 +79,55 @@ export const WORKDIR: Record<WorkdirKind, { name: string; description: string }>
 export const REASONING = ['off', 'low', 'medium', 'high', 'max'];
 export const DEFAULT_REASONING = 'medium';
 
+export type NetworkAccess = 'restricted' | 'public';
+
+export const NETWORK: Record<NetworkAccess, { name: string; description: string }> = {
+  restricted: { name: 'Model API only', description: 'The session reaches the model’s API and nothing else.' },
+  public: {
+    name: 'Public internet',
+    description: 'Also any public host on the ports you choose. The host’s own and private networks stay unreachable.',
+  },
+};
+
+/** Ports offered as switches; others are typed in. */
+export const COMMON_PORTS: { port: number; name: string }[] = [
+  { port: 443, name: 'HTTPS' },
+  { port: 80, name: 'HTTP' },
+];
+
+export interface NetworkDraft {
+  access: NetworkAccess;
+  ports: number[];
+  allPorts: boolean;
+  /** More ports, comma or space separated. */
+  extra: string;
+}
+
+/** The typed ports, or null when one of them is not a port. */
+export function extraPorts(extra: string): number[] | null {
+  const parts = extra.split(/[\s,]+/).filter(Boolean);
+  const ports = parts.map(Number);
+  return ports.every((p) => Number.isInteger(p) && p >= 1 && p <= 65535) ? ports : null;
+}
+
+/** All chosen ports, or null when every port is allowed or a typed one is invalid. */
+export function chosenPorts(network: NetworkDraft): number[] | null {
+  if (network.allPorts) return null;
+  const extra = extraPorts(network.extra);
+  return extra && [...new Set([...network.ports, ...extra])];
+}
+
+export function networkValid(network: NetworkDraft): boolean {
+  if (network.access === 'restricted' || network.allPorts) return true;
+  const ports = chosenPorts(network);
+  return ports !== null && ports.length > 0;
+}
+
+export function describeNetwork(network: NetworkDraft): string {
+  if (network.access === 'restricted') return NETWORK.restricted.name;
+  return network.allPorts ? 'Public internet, all ports' : `Public internet, ports ${chosenPorts(network)?.join(', ')}`;
+}
+
 export interface SessionDraft {
   harness: HarnessId | null;
   isolation: IsolationId | null;
@@ -86,6 +135,7 @@ export interface SessionDraft {
   provider: string | null;
   model: string;
   reasoning: string;
+  network: NetworkDraft;
 }
 
 export const EMPTY_DRAFT: SessionDraft = {
@@ -95,6 +145,7 @@ export const EMPTY_DRAFT: SessionDraft = {
   provider: null,
   model: '',
   reasoning: DEFAULT_REASONING,
+  network: { access: 'restricted', ports: [443, 80], allPorts: false, extra: '' },
 };
 
 export function providerName(id: string): string {
@@ -147,6 +198,9 @@ export function buildRequest(draft: SessionDraft) {
     isolation: draft.isolation,
     workdir,
     model: { provider: draft.provider, id: draft.model.trim(), reasoning: draft.reasoning },
+    network: draft.network.access === 'restricted'
+      ? { access: 'restricted' }
+      : { access: 'public', ports: chosenPorts(draft.network) },
   };
 }
 
@@ -160,7 +214,9 @@ export function buildPlan(draft: SessionDraft): string[] {
 
   if (inVm) {
     steps.push('Boot a Firecracker microvm with its own disk and no network device.');
-    steps.push('Allow outbound connections only to the model’s API host and the hosts tool setup needs.');
+    steps.push(draft.network.access === 'restricted'
+      ? 'Allow outbound connections only to the model’s API host and the hosts tool setup needs.'
+      : `Allow outbound connections to the model’s API host and to public hosts on ${draft.network.allPorts ? 'any port' : `ports ${chosenPorts(draft.network)?.join(', ')}`}; private networks stay blocked.`);
   }
   if (draft.isolation === 'backend') steps.push('Start an isolated backend for tool calls and the terminal.');
 

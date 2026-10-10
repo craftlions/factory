@@ -5,12 +5,14 @@ import { useHarnessModels, useReasoningLevels } from '../harnessCatalog';
 import { reasoningLevels, useOpenRouterModels } from '../openrouter';
 import { Link, navigate } from '../router';
 import {
-  DEFAULT_REASONING, EMPTY_DRAFT, HARNESSES, ISOLATION, ISOLATION_ORDER, PROVIDERS, REASONING, WORKDIR,
-  buildPlan, buildRequest, describeWorkdir, harnessOf, notCreatable, providerName, withHarness,
-  type IsolationId, type SessionDraft, type WorkdirKind,
+  COMMON_PORTS, DEFAULT_REASONING, EMPTY_DRAFT, HARNESSES, ISOLATION, ISOLATION_ORDER, NETWORK, PROVIDERS, REASONING,
+  WORKDIR, buildPlan, buildRequest, describeNetwork, describeWorkdir, extraPorts, harnessOf, networkValid,
+  notCreatable, providerName, withHarness,
+  type IsolationId, type NetworkAccess, type NetworkDraft, type SessionDraft, type WorkdirKind,
 } from '../sessionOptions';
 
-const STEPS = ['Harness', 'Isolation', 'Workspace', 'Model'];
+const STEPS = ['Harness', 'Isolation', 'Workspace', 'Model', 'Network'];
+const NETWORK_ORDER: NetworkAccess[] = ['restricted', 'public'];
 const REVIEW = STEPS.length;
 const WORKDIR_ICON: Record<WorkdirKind, ReactNode> = { local: <FolderIcon />, git: <GitIcon />, empty: <SparkIcon /> };
 
@@ -21,6 +23,7 @@ function stepValid(step: number, draft: SessionDraft): boolean {
     case 1: return draft.isolation !== null;
     case 2: return w.kind === 'empty' || (w.kind === 'local' ? w.path.trim() !== '' : w.url.trim() !== '');
     case 3: return draft.provider !== null && draft.model.trim() !== '';
+    case 4: return networkValid(draft.network);
     default: return true;
   }
 }
@@ -173,6 +176,15 @@ export function NewSessionPage() {
   const harness = harnessOf(draft);
   const setWorkdir = (patch: Partial<SessionDraft['workdir']>) =>
     setDraft((d) => ({ ...d, workdir: { ...d.workdir, ...patch } }));
+  const setNetwork = (patch: Partial<NetworkDraft>) =>
+    setDraft((d) => ({ ...d, network: { ...d.network, ...patch } }));
+  const togglePort = (port: number) =>
+    setDraft((d) => {
+      const ports = d.network.ports.includes(port)
+        ? d.network.ports.filter((p) => p !== port)
+        : [...d.network.ports, port];
+      return { ...d, network: { ...d.network, ports } };
+    });
 
   // Three sources for the model step. A harness with a server catalog (Claude Code) is
   // served by the factory from models.dev, with providers, models and
@@ -251,6 +263,7 @@ export function NewSessionPage() {
     draft.isolation ? ISOLATION[draft.isolation].name : null,
     valid(2) ? describeWorkdir(draft.workdir) : null,
     valid(3) ? `${providerName(draft.provider!)} · ${modelId} · ${draft.reasoning}` : null,
+    valid(4) ? describeNetwork(draft.network) : null,
   ];
 
   function onSubmit(event: FormEvent) {
@@ -467,6 +480,53 @@ export function NewSessionPage() {
                 ))}
               </div>
               {reasoningNote && <p className="hint">{reasoningNote}</p>}
+            </fieldset>
+          )}
+
+          {step === 4 && (
+            <fieldset>
+              <legend>What may the session reach on the network?</legend>
+              <div className="cards two stacked">
+                {NETWORK_ORDER.map((access) => (
+                  <Card key={access} name="network" title={NETWORK[access].name}
+                    checked={draft.network.access === access} onSelect={() => setNetwork({ access })}>
+                    {NETWORK[access].description}
+                  </Card>
+                ))}
+              </div>
+              {draft.network.access === 'public' && (
+                <div className="rise">
+                  <p className="label">Ports</p>
+                  <div className="pills" role="group" aria-label="Ports">
+                    {COMMON_PORTS.map(({ port, name }) => (
+                      <label key={port} className="pill">
+                        <input type="checkbox" checked={draft.network.allPorts || draft.network.ports.includes(port)}
+                          disabled={draft.network.allPorts} onChange={() => togglePort(port)} />
+                        {name} · {port}
+                      </label>
+                    ))}
+                    <label className="pill">
+                      <input type="checkbox" checked={draft.network.allPorts}
+                        onChange={(e) => setNetwork({ allPorts: e.target.checked })} />
+                      All ports
+                    </label>
+                  </div>
+                  {!draft.network.allPorts && (
+                    <label className="field">Other ports
+                      <input type="text" spellCheck={false} placeholder="e.g. 8080, 8443" value={draft.network.extra}
+                        onChange={(e) => setNetwork({ extra: e.target.value })} />
+                    </label>
+                  )}
+                  {extraPorts(draft.network.extra) === null && !draft.network.allPorts && (
+                    <p className="hint bad">Ports are numbers from 1 to 65535.</p>
+                  )}
+                  <p className="hint">
+                    The session has no network device; everything goes through the factory’s proxy. Tools that use
+                    {' '}<code>HTTPS_PROXY</code>, such as curl, git over HTTPS, npm and pip, reach the chosen ports.
+                    SSH does not use it.
+                  </p>
+                </div>
+              )}
             </fieldset>
           )}
         </div>
