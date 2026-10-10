@@ -147,24 +147,11 @@ struct PromptRequest {
 #[derive(Serialize)]
 struct Settings {
     credentials: Vec<credentials::Status>,
-    /// pi reads its own credentials file, which is placed by hand.
-    pi_auth: PiAuth,
-}
-
-#[derive(Serialize)]
-struct PiAuth {
-    path: String,
-    present: bool,
 }
 
 async fn settings(app: &App) -> sqlx::Result<Settings> {
-    let (path, present) = app.sessions.pi_auth();
     Ok(Settings {
         credentials: credentials::statuses(&app.pool).await?,
-        pi_auth: PiAuth {
-            path: path.display().to_string(),
-            present,
-        },
     })
 }
 

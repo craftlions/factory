@@ -71,8 +71,6 @@ export interface HarnessCredentials {
 
 export interface Settings {
   credentials: HarnessCredentials[];
-  /** pi reads its own credentials file, which is placed by hand. */
-  pi_auth: { path: string; present: boolean };
 }
 
 export const fetchSettings = (signal: AbortSignal) => getJsonOrError<Settings>('/api/settings', signal);
@@ -109,10 +107,10 @@ async function getJsonOrError<T>(url: string, signal: AbortSignal): Promise<T> {
   return body;
 }
 
-/** Models the harness itself reports as usable on this host. */
+/** Models the harness can use, from the factory's catalog. */
 export const fetchHarnessModels = (harness: string, signal: AbortSignal) =>
   getJsonOrError<HarnessModel[]>(`/api/harnesses/${harness}/models`, signal);
-/** Reasoning levels the harness reports for one model. */
+/** Reasoning levels of one model, from the factory's catalog. */
 export const fetchReasoningLevels = (harness: string, provider: string, model: string, signal: AbortSignal) =>
   getJsonOrError<string[]>(
     `/api/harnesses/${harness}/reasoning?provider=${encodeURIComponent(provider)}&model=${encodeURIComponent(model)}`,

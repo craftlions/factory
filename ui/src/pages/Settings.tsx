@@ -104,15 +104,6 @@ export function SettingsPage() {
       {settings.credentials.map((harness) => (
         <CredentialsPanel key={harness.id} harness={harness} onChange={reload} />
       ))}
-      <section className="panel">
-        <div className="panel-head">
-          <h2>Pi</h2>
-          <span className="chip">{settings.pi_auth.present ? 'Credentials present' : 'No credentials'}</span>
-        </div>
-        <p className="detail">
-          Pi reads its own credentials file, with an entry per provider. Place it at <code>{settings.pi_auth.path}</code>.
-        </p>
-      </section>
     </>
   );
 }

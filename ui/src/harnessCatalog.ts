@@ -6,7 +6,7 @@ export type CatalogState =
   | { status: 'ready'; models: HarnessModel[] }
   | { status: 'error'; models: []; message: string };
 
-/** Models a harness reports for this host. `harness` is null when its catalog is not served by the factory. */
+/** Models a harness can use, from the factory's catalog. `harness` is null when the factory serves no catalog for it. */
 export function useHarnessModels(harness: string | null): CatalogState & { retry: () => void } {
   const [state, setState] = useState<CatalogState>({ status: 'idle', models: [] });
   const [attempt, setAttempt] = useState(0);

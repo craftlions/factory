@@ -174,9 +174,9 @@ export function NewSessionPage() {
   const setWorkdir = (patch: Partial<SessionDraft['workdir']>) =>
     setDraft((d) => ({ ...d, workdir: { ...d.workdir, ...patch } }));
 
-  // Three sources for the model step. A harness with a server catalog (pi, Claude Code) is
-  // asked through the factory for providers, models and per-model reasoning
-  // levels. Elsewhere OpenRouter's public list is queried directly, and the
+  // Three sources for the model step. A harness with a server catalog (Claude Code) is
+  // served by the factory from models.dev, with providers, models and
+  // per-model reasoning levels. Elsewhere OpenRouter's public list is queried directly, and the
   // remaining providers share one generic list.
   const serverCatalog = harness?.catalog === 'server' ? harness.id : null;
   const catalog = useHarnessModels(serverCatalog);
@@ -196,8 +196,8 @@ export function NewSessionPage() {
   if (serverCatalog) {
     levels = harnessLevels.status === 'ready' ? harnessLevels.levels : [];
     fallbackLevel = levels.includes(DEFAULT_REASONING) ? DEFAULT_REASONING : levels[0] ?? DEFAULT_REASONING;
-    reasoningNote = harnessLevels.status === 'ready' ? `Levels ${harness!.name} reports for this model.`
-      : harnessLevels.status === 'loading' ? `Asking ${harness!.name} which levels this model supports…`
+    reasoningNote = harnessLevels.status === 'ready' ? 'Effort levels models.dev lists for this model.'
+      : harnessLevels.status === 'loading' ? 'Loading the levels this model supports…'
       : harnessLevels.status === 'error' ? `Could not get the levels: ${harnessLevels.message}`
       : 'Pick a model from the list to see the levels it supports.';
   } else if (draft.provider === 'openrouter') {
@@ -313,7 +313,7 @@ export function NewSessionPage() {
             {creating ? 'Starting…' : 'Create session'} <ArrowIcon />
           </button>
         </div>
-        {blocked && <p className="hint">{blocked} So far only Pi and Claude Code in a microvm with an empty directory can be created.</p>}
+        {blocked && <p className="hint">{blocked} So far only Claude Code in a microvm with an empty directory can be created.</p>}
         {createError && <p className="msg-error" role="alert">{createError}</p>}
       </div>
     );
@@ -422,9 +422,9 @@ export function NewSessionPage() {
                 ))}
               </div>
 
-              {serverCatalog && catalog.status === 'loading' && <p className="hint">Asking {harness.name} for its providers and models…</p>}
+              {serverCatalog && catalog.status === 'loading' && <p className="hint">Loading the models {harness.name} can use…</p>}
               {serverCatalog && catalog.status === 'ready' && (
-                <p className="hint">Providers {harness.name} has credentials for on this host.</p>
+                <p className="hint">Models {harness.name} can use, as listed on models.dev.</p>
               )}
 
               {serverCatalog || draft.provider === 'openrouter' ? (

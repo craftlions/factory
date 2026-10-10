@@ -212,13 +212,6 @@ impl Sessions {
             .cloned()
     }
 
-    /// Where pi's credentials go, and whether they are there.
-    pub fn pi_auth(&self) -> (PathBuf, bool) {
-        let auth = self.pi_config.join("auth.json");
-        let present = auth.is_file();
-        (auth, present)
-    }
-
     /// What the harness needs in the guest besides its command line: files and
     /// secret environment variables. Credentials are copied in, so code running
     /// in the guest can read them.

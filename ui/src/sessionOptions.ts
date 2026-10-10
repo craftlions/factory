@@ -1,7 +1,8 @@
 // Catalog behind the new-session questionnaire. Nothing here talks to the
 // server yet; edit these tables to change what the questionnaire offers.
 
-export type HarnessId = 'hermes' | 'pi' | 'claude' | 'codex';
+// pi, Hermes and Codex are left out for now; Claude Code comes first.
+export type HarnessId = 'claude';
 // Running a harness directly on the host is not offered: harnesses execute
 // shell commands without asking, so the factory only provides isolated paths.
 export type IsolationId = 'backend' | 'harness';
@@ -44,25 +45,6 @@ export const PROVIDERS: Record<string, Provider> = {
 
 export const HARNESSES: Harness[] = [
   {
-    id: 'hermes',
-    mark: 'He',
-    hue: 75,
-    name: 'Hermes',
-    description: 'Hermes agent with pluggable terminal backends.',
-    isolation: ['backend', 'harness'],
-    providers: ['nous', 'openrouter', 'anthropic', 'openai'],
-  },
-  {
-    id: 'pi',
-    mark: 'π',
-    hue: 330,
-    name: 'Pi',
-    description: 'Minimal coding agent, extensible tools.',
-    isolation: ['backend', 'harness'],
-    providers: [],
-    catalog: 'server',
-  },
-  {
     id: 'claude',
     mark: 'Cl',
     hue: 40,
@@ -71,15 +53,6 @@ export const HARNESSES: Harness[] = [
     isolation: ['harness'],
     providers: [],
     catalog: 'server',
-  },
-  {
-    id: 'codex',
-    mark: 'Cx',
-    hue: 160,
-    name: 'Codex',
-    description: 'OpenAI’s coding agent.',
-    isolation: ['harness'],
-    providers: ['openai'],
   },
 ];
 
@@ -129,7 +102,7 @@ export function providerName(id: string): string {
 }
 
 /** Harnesses the factory can start. */
-const IMPLEMENTED: HarnessId[] = ['pi', 'claude'];
+const IMPLEMENTED: HarnessId[] = ['claude'];
 
 /** Why this draft cannot be created yet, or null when the factory can start it. */
 export function notCreatable(draft: SessionDraft): string | null {
