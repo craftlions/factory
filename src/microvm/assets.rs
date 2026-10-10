@@ -1,6 +1,7 @@
 //! What every microvm boots from: the guest kernel and root filesystem the
-//! Firecracker project publishes, and a small tools drive with mise and the
-//! setup script. Downloaded and built once, then shared read-only.
+//! Firecracker project publishes, and a small tools drive with mise, the setup
+//! script and each harness's tool configuration. Downloaded and built once,
+//! then shared read-only.
 
 use std::{
     io,
@@ -151,10 +152,28 @@ async fn download_mise(target: &Path, arch: &str) -> io::Result<()> {
     Ok(())
 }
 
+/// The files that go onto the tools drive besides mise, relative to the guest
+/// directory: the setup script and one mise configuration per harness.
+async fn tool_files(guest_dir: &Path) -> io::Result<Vec<PathBuf>> {
+    let mut files = vec![PathBuf::from("startup.sh")];
+    let mut configs = fs::read_dir(guest_dir.join("tools")).await?;
+    let mut tools = Vec::new();
+    while let Some(entry) = configs.next_entry().await? {
+        let name = PathBuf::from(entry.file_name());
+        if name.extension().is_some_and(|ext| ext == "toml") {
+            tools.push(Path::new("tools").join(name));
+        }
+    }
+    tools.sort();
+    files.extend(tools);
+    Ok(files)
+}
+
 /// The tools drive is rebuilt whenever what goes into it changes.
-async fn tools_stamp(guest_dir: &Path) -> io::Result<String> {
+async fn tools_stamp(guest_dir: &Path, files: &[PathBuf]) -> io::Result<String> {
     let mut stamp = format!("mise {MISE_VERSION}\n");
-    for name in ["startup.sh", "mise.toml"] {
+    for name in files {
+        stamp.push_str(&format!("{}\n", name.display()));
         stamp.push_str(&fs::read_to_string(guest_dir.join(name)).await?);
     }
     Ok(stamp)
@@ -163,14 +182,16 @@ async fn tools_stamp(guest_dir: &Path) -> io::Result<String> {
 async fn build_tools_drive(
     dir: &Path,
     guest_dir: &Path,
+    files: &[PathBuf],
     mise: &Path,
     drive: &Path,
 ) -> io::Result<()> {
     let staging = dir.join("tools-staging");
     let _ = fs::remove_dir_all(&staging).await;
     fs::create_dir_all(staging.join("bin")).await?;
+    fs::create_dir_all(staging.join("tools")).await?;
     fs::copy(mise, staging.join("bin/mise")).await?;
-    for name in ["startup.sh", "mise.toml"] {
+    for name in files {
         fs::copy(guest_dir.join(name), staging.join(name)).await?;
     }
     #[cfg(unix)]
@@ -226,11 +247,12 @@ pub async fn ensure(
         download_mise(&mise, arch).await?;
     }
 
-    let stamp = tools_stamp(guest_dir).await?;
+    let files = tool_files(guest_dir).await?;
+    let stamp = tools_stamp(guest_dir, &files).await?;
     let stamp_file = dir.join("tools.stamp");
     if !assets.tools.exists() || fs::read_to_string(&stamp_file).await.ok().as_ref() != Some(&stamp)
     {
-        build_tools_drive(dir, guest_dir, &mise, &assets.tools).await?;
+        build_tools_drive(dir, guest_dir, &files, &mise, &assets.tools).await?;
         fs::write(&stamp_file, &stamp).await?;
     }
     Ok(assets)

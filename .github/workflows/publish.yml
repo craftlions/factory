@@ -154,7 +154,8 @@ jobs:
           install -m 0644 "$RUNNER_TEMP/guest-initramfs.cpio" \
             "$PKGROOT/usr/lib/craftlions-factory/guest-initramfs.cpio"
           install -m 0755 packaging/guest/startup.sh "$PKGROOT/usr/lib/craftlions-factory/guest/startup.sh"
-          install -m 0644 packaging/guest/mise.toml "$PKGROOT/usr/lib/craftlions-factory/guest/mise.toml"
+          install -d "$PKGROOT/usr/lib/craftlions-factory/guest/tools"
+          install -m 0644 packaging/guest/tools/*.toml "$PKGROOT/usr/lib/craftlions-factory/guest/tools/"
 
           install -m 0644 packaging/craftlions-factory.service \
             "$PKGROOT/usr/lib/systemd/system/craftlions-factory.service"

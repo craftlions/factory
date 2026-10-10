@@ -88,6 +88,8 @@ enum Refusal {
 
 /// What one start of a harness needs, owned so it can move into a task.
 struct Launch {
+    /// The harness's id, which also names the tools its vm installs.
+    harness: String,
     adapter: &'static dyn Harness,
     provider: String,
     model: String,
@@ -229,7 +231,7 @@ impl Sessions {
         let adapter = harness::by_id(harness_id)?;
         let result = async {
             let invocation = adapter.catalog_invocation(None);
-            let process = self.catalog_process(&invocation).await?;
+            let process = self.catalog_process(harness_id, &invocation).await?;
             adapter.models(process).await
         }
         .await;
@@ -251,7 +253,7 @@ impl Sessions {
         Some(
             async {
                 let invocation = adapter.catalog_invocation(Some((provider, model)));
-                let process = self.catalog_process(&invocation).await?;
+                let process = self.catalog_process(harness_id, &invocation).await?;
                 adapter
                     .reasoning_levels(process, provider.to_owned(), model.to_owned())
                     .await
@@ -263,6 +265,7 @@ impl Sessions {
     /// Catalog vms reuse one disk, so tools are only installed the first time.
     async fn catalog_process(
         &self,
+        harness_id: &str,
         invocation: &harness::Invocation,
     ) -> io::Result<harness::Process> {
         let _one_at_a_time = self.catalog_vm.lock().await;
@@ -272,6 +275,7 @@ impl Sessions {
         let request = VmRequest {
             dir: &dir,
             invocation,
+            tools: harness_id,
             files: self.guest_files()?,
             hosts: Vec::new(),
             notices,
@@ -361,6 +365,7 @@ impl Sessions {
             return Err(CreateError::Launch(error));
         }
         let launch = Launch {
+            harness: request.harness.clone(),
             adapter,
             provider: model.provider.clone(),
             model: model.id.clone(),
@@ -447,6 +452,7 @@ impl Sessions {
         let request = VmRequest {
             dir: &dir,
             invocation: &invocation,
+            tools: &launch.harness,
             files,
             hosts: launch.hosts.clone(),
             notices,
@@ -542,6 +548,7 @@ impl Sessions {
             ));
         }
         let launch = Launch {
+            harness: session.kind.clone(),
             adapter,
             provider: provider.clone(),
             model: model.clone(),

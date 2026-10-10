@@ -32,6 +32,8 @@ fn invocation(args: &[&str]) -> Invocation {
     Invocation {
         program: "pi".into(),
         args: all,
+        // Its startup network calls would only be refused by the proxy.
+        env: vec![("PI_OFFLINE".into(), "1".into())],
     }
 }
 

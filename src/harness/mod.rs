@@ -160,6 +160,8 @@ pub enum Resume<'a> {
 pub struct Invocation {
     pub program: String,
     pub args: Vec<String>,
+    /// Set on top of the environment's own variables. Never secrets.
+    pub env: Vec<(String, String)>,
 }
 
 /// A harness process, wherever it runs. The environment that started it owns

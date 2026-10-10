@@ -42,20 +42,30 @@ const LOG_TAIL: usize = 20;
 /// skip their permission prompts as root, and nothing they do needs root.
 const GUEST_USER: &str = "factory";
 const GUEST_UID: u32 = 1000;
-/// Hosts mise needs to install the tools in `packaging/guest/mise.toml` from
-/// GitHub releases. Found by running the setup script in the published root
-/// filesystem with nothing allowed and reading what the proxy refused.
-const TOOL_HOSTS: [&str; 3] = [
-    "api.github.com",
-    "github.com",
-    "release-assets.githubusercontent.com",
-];
+/// Where the tools drive is mounted inside the guest.
+const TOOLS_MOUNT: &str = "/opt/factory";
+
+/// Hosts mise needs to install the tools in `packaging/guest/tools/<tools>.toml`.
+/// Found by running the setup script in the published root filesystem with
+/// nothing allowed and reading what the proxy refused.
+fn tool_hosts(tools: &str) -> &'static [&'static str] {
+    match tools {
+        "pi" => &[
+            "api.github.com",
+            "github.com",
+            "release-assets.githubusercontent.com",
+        ],
+        _ => &[],
+    }
+}
 
 /// One start of a guest.
 pub struct VmRequest<'a> {
     /// The session's directory on the host; holds its disk and the vm's files.
     pub dir: &'a Path,
     pub invocation: &'a Invocation,
+    /// Names the mise configuration on the tools drive that setup installs.
+    pub tools: &'a str,
     /// Written inside the guest before anything runs.
     pub files: Vec<GuestFile>,
     /// Hosts the harness may reach, beyond what tool setup needs.
@@ -68,7 +78,7 @@ pub struct VmRequest<'a> {
 pub struct Microvm {
     pub firecracker: PathBuf,
     pub initrd: PathBuf,
-    /// Holds `startup.sh` and `mise.toml` for the tools drive.
+    /// Holds `startup.sh` and `tools/<harness>.toml` for the tools drive.
     pub guest_dir: PathBuf,
     /// Shared kernel, root filesystem and tools drive.
     pub assets_dir: PathBuf,
@@ -94,8 +104,12 @@ impl Microvm {
             guest_dir: path("FACTORY_GUEST_DIR", lib.join("guest")),
             assets_dir: data_dir.join("microvm"),
             guest_root: "/session".into(),
-            setup: vec!["/bin/sh".into(), "/opt/factory/startup.sh".into()],
-            wrapper: vec!["/opt/factory/bin/mise".into(), "exec".into(), "--".into()],
+            setup: vec!["/bin/sh".into(), format!("{TOOLS_MOUNT}/startup.sh")],
+            wrapper: vec![
+                format!("{TOOLS_MOUNT}/bin/mise"),
+                "exec".into(),
+                "--".into(),
+            ],
             guest_proxy_port: 3128,
             vcpus: 2,
             memory_mib: 2048,
@@ -118,11 +132,11 @@ impl Microvm {
     fn spec(&self, request: &VmRequest) -> Spec {
         let home = self.home();
         let proxy = format!("http://127.0.0.1:{}", self.guest_proxy_port);
-        let env: BTreeMap<String, String> = [
+        let mut env: BTreeMap<String, String> = [
             ("HOME", home.clone()),
             ("USER", GUEST_USER.into()),
             ("LOGNAME", GUEST_USER.into()),
-            ("PATH", format!("{home}/.local/share/mise/shims:/opt/factory/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")),
+            ("PATH", format!("{home}/.local/share/mise/shims:{TOOLS_MOUNT}/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")),
             ("LANG", "C.UTF-8".into()),
             ("TERM", "dumb".into()),
             // The guest has no network device; the agent forwards this port to
@@ -133,15 +147,17 @@ impl Microvm {
             ("http_proxy", proxy),
             ("NO_PROXY", "127.0.0.1,localhost".into()),
             ("NODE_USE_ENV_PROXY", "1".into()),
-            ("MISE_GLOBAL_CONFIG_FILE", "/opt/factory/mise.toml".into()),
-            ("MISE_TRUSTED_CONFIG_PATHS", "/opt/factory".into()),
+            (
+                "MISE_GLOBAL_CONFIG_FILE",
+                format!("{TOOLS_MOUNT}/tools/{}.toml", request.tools),
+            ),
+            ("MISE_TRUSTED_CONFIG_PATHS", TOOLS_MOUNT.into()),
             ("MISE_YES", "1".into()),
-            // Its startup network calls would only be refused by the proxy.
-            ("PI_OFFLINE", "1".into()),
         ]
         .into_iter()
         .map(|(key, value)| (key.to_owned(), value))
         .collect();
+        env.extend(request.invocation.env.iter().cloned());
 
         let mut harness = self.wrapper.clone();
         harness.push(request.invocation.program.clone());
@@ -240,7 +256,10 @@ impl Microvm {
             )
         })?;
 
-        let mut hosts: Vec<String> = TOOL_HOSTS.iter().map(|host| (*host).to_owned()).collect();
+        let mut hosts: Vec<String> = tool_hosts(request.tools)
+            .iter()
+            .map(|host| (*host).to_owned())
+            .collect();
         hosts.extend(request.hosts.iter().cloned());
         let allow = Arc::new(AllowList::new(hosts));
         let proxy_notices = request.notices.clone();
