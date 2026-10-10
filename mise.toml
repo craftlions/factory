@@ -1,10 +1,10 @@
 [tools]
 rust = "latest"
 zig = "latest"
-node = "26.9.0"
-watchexec = "2.7.3"
+node = "26.11.1"
+watchexec = "2.8.0"
 # Aube moved from jdx/aube; use the current release/attestation identity.
-"github:aubepkg/aube" = "2.2.17"
+"github:aubepkg/aube" = "2.7.0"
 
 [tasks."ui:install"]
 dir = "ui"
