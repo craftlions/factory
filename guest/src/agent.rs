@@ -52,8 +52,22 @@ fn send(control: &Control, event: &GuestEvent) {
         .write_all(line.as_bytes());
 }
 
+/// Copies with plain reads and writes. `io::copy` splices when one side is a
+/// pipe, and a blocking splice from a socket holds the pipe's lock while it
+/// waits for more data, so the harness could never read what already arrived.
 fn copy_then_close(mut from: impl Read, mut to: impl Write, close: impl FnOnce()) {
-    let _ = io::copy(&mut from, &mut to);
+    let mut buffer = [0u8; 64 * 1024];
+    loop {
+        let read = match from.read(&mut buffer) {
+            Ok(0) => break,
+            Ok(read) => read,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(_) => break,
+        };
+        if to.write_all(&buffer[..read]).is_err() {
+            break;
+        }
+    }
     close();
 }
 
