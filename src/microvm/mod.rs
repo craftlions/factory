@@ -241,6 +241,18 @@ impl Microvm {
         )
         .await?;
         let console = std::fs::File::create(vm_dir.join("console.log"))?;
+        let log = GuestLog::create(&vm_dir.join("harness.log"));
+        log.write(
+            "factory",
+            &format!(
+                "starting {}",
+                [request.invocation.program.as_str()]
+                    .into_iter()
+                    .chain(request.invocation.args.iter().map(String::as_str))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+        );
         let mut command = Command::new(&self.firecracker);
         command
             .args(["--no-api", "--config-file", "config.json"])
@@ -266,7 +278,15 @@ impl Microvm {
             allow: AllowList::new(hosts),
             egress: request.egress.clone(),
         });
-        let proxy_notices = request.notices.clone();
+        // Refusals go to the chat and into the log.
+        let (proxy_notices, mut refused) = mpsc::unbounded_channel::<String>();
+        let (chat, proxy_log) = (request.notices.clone(), log.clone());
+        tokio::spawn(async move {
+            while let Some(notice) = refused.recv().await {
+                proxy_log.write("proxy", &notice);
+                let _ = chat.send(notice);
+            }
+        });
         let proxy_task = tokio::spawn(async move {
             while let Ok((stream, _)) = proxy_listener.accept().await {
                 tokio::spawn(proxy::serve(stream, policy.clone(), proxy_notices.clone()));
@@ -298,7 +318,11 @@ impl Microvm {
                     console_tail()
                 )));
             };
-            match serde_json::from_str::<GuestEvent>(&line) {
+            let event = serde_json::from_str::<GuestEvent>(&line);
+            if let Ok(event) = &event {
+                log.event(event);
+            }
+            match event {
                 Ok(GuestEvent::Log { line, .. }) => {
                     let _ = request.notices.send(line);
                 }
@@ -327,7 +351,14 @@ impl Microvm {
         let (stop, stop_rx) = oneshot::channel::<()>();
         let (exited_tx, exited) = oneshot::channel();
         tokio::spawn(async move {
-            let failure = supervise(&mut child, events, control_write, stop_rx).await;
+            let failure = supervise(&mut child, events, control_write, stop_rx, &log).await;
+            log.write(
+                "factory",
+                &format!(
+                    "the vm ended: {}",
+                    failure.as_deref().unwrap_or("without a failure")
+                ),
+            );
             drop(proxy_guard);
             let _ = exited_tx.send(failure);
         });
@@ -396,6 +427,76 @@ impl Microvm {
     }
 }
 
+/// `harness.log` in a vm's directory, written as things happen: what setup
+/// printed, the harness's stderr, how each phase ended, and what the proxy
+/// refused. Losing it never stops a session.
+#[derive(Clone)]
+struct GuestLog(Arc<std::sync::Mutex<Option<std::fs::File>>>);
+
+/// A UTC time such as `2026-10-10T17:13:42Z`, after Howard Hinnant's
+/// civil-from-days algorithm.
+fn utc(time: std::time::SystemTime) -> String {
+    let secs = time
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |since| since.as_secs() as i64);
+    let (days, clock) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let day_of_era = z - era * 146_097;
+    let year_of_era =
+        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
+    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
+    let month_index = (5 * day_of_year + 2) / 153;
+    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
+    let month = if month_index < 10 {
+        month_index + 3
+    } else {
+        month_index - 9
+    };
+    let year = year_of_era + era * 400 + i64::from(month <= 2);
+    format!(
+        "{year:04}-{month:02}-{day:02}T{:02}:{:02}:{:02}Z",
+        clock / 3600,
+        clock % 3600 / 60,
+        clock % 60
+    )
+}
+
+impl GuestLog {
+    fn create(path: &Path) -> Self {
+        let file = std::fs::File::create(path)
+            .inspect_err(|error| eprintln!("cannot write {}: {error}", path.display()))
+            .ok();
+        Self(Arc::new(std::sync::Mutex::new(file)))
+    }
+
+    fn write(&self, source: &str, text: &str) {
+        use std::io::Write;
+        if let Some(file) = self.0.lock().expect("guest log lock").as_mut() {
+            let _ = writeln!(
+                file,
+                "{} [{source}] {text}",
+                utc(std::time::SystemTime::now())
+            );
+        }
+    }
+
+    fn event(&self, event: &GuestEvent) {
+        let phase = |phase: &Phase| match phase {
+            Phase::Setup => "setup",
+            Phase::Harness => "harness",
+        };
+        match event {
+            GuestEvent::Phase { phase: p } => self.write(phase(p), "started"),
+            GuestEvent::Log { phase: p, line } => self.write(phase(p), line),
+            GuestEvent::Exit { phase: p, code } => {
+                self.write(phase(p), &format!("exited with code {code:?}"))
+            }
+            GuestEvent::Error { message } => self.write("agent", message),
+        }
+    }
+}
+
 struct AbortOnDrop(tokio::task::JoinHandle<()>);
 
 impl Drop for AbortOnDrop {
@@ -438,6 +539,7 @@ async fn supervise(
     mut events: tokio::io::Lines<BufReader<tokio::net::unix::OwnedReadHalf>>,
     mut control: tokio::net::unix::OwnedWriteHalf,
     stop: oneshot::Receiver<()>,
+    log: &GuestLog,
 ) -> Option<String> {
     let mut stderr_tail: Vec<String> = Vec::new();
     let mut exit_code: Option<Option<i32>> = None;
@@ -455,6 +557,7 @@ async fn supervise(
         tokio::select! {
             () = &mut stop, if !stopped => {
                 stopped = true;
+                log.write("factory", "stopping the session");
                 let mut message = serde_json::to_string(&HostMessage::Stop).expect("serialises");
                 message.push('\n');
                 let _ = control.write_all(message.as_bytes()).await;
@@ -462,7 +565,7 @@ async fn supervise(
             }
             () = &mut deadline => break,
             line = events.next_line() => match line {
-                Ok(Some(line)) => match serde_json::from_str::<GuestEvent>(&line) {
+                Ok(Some(line)) => match serde_json::from_str::<GuestEvent>(&line).inspect(|event| log.event(event)) {
                     Ok(GuestEvent::Log { line, .. }) => {
                         if stderr_tail.len() == LOG_TAIL {
                             stderr_tail.remove(0);
