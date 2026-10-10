@@ -137,6 +137,7 @@ impl Microvm {
     fn spec(&self, request: &VmRequest) -> Spec {
         let home = self.home();
         let proxy = format!("http://127.0.0.1:{}", self.guest_proxy_port);
+        let ca_bundle = format!("{TOOLS_MOUNT}/{}", assets::CA_BUNDLE);
         let mut env: BTreeMap<String, String> = [
             ("HOME", home.clone()),
             ("USER", GUEST_USER.into()),
@@ -152,6 +153,10 @@ impl Microvm {
             ("http_proxy", proxy),
             ("NO_PROXY", "127.0.0.1,localhost".into()),
             ("NODE_USE_ENV_PROXY", "1".into()),
+            // OpenSSL, and with it curl, git and Python, and mise read the
+            // bundle from here; Node adds it to its own.
+            ("SSL_CERT_FILE", ca_bundle.clone()),
+            ("NODE_EXTRA_CA_CERTS", ca_bundle),
             (
                 "MISE_GLOBAL_CONFIG_FILE",
                 format!("{TOOLS_MOUNT}/tools/{}.toml", request.tools),

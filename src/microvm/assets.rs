@@ -15,6 +15,11 @@ const ARTIFACTS: &str = "https://s3.amazonaws.com/spec.ccfc.min";
 const KERNEL_SERIES: &str = "vmlinux-6.1.";
 const MISE_VERSION: &str = "v2026.9.12";
 const TOOLS_DRIVE_SIZE: &str = "512M";
+/// The published root filesystem has no CA certificates, so the guest gets
+/// the host's bundle on the tools drive.
+const HOST_CA_BUNDLE: &str = "/etc/ssl/certs/ca-certificates.crt";
+/// Where the bundle goes on the tools drive.
+pub const CA_BUNDLE: &str = "ca-certificates.crt";
 
 #[derive(Clone, Debug)]
 pub struct Assets {
@@ -169,9 +174,18 @@ async fn tool_files(guest_dir: &Path) -> io::Result<Vec<PathBuf>> {
     Ok(files)
 }
 
+async fn host_ca_bundle() -> io::Result<String> {
+    fs::read_to_string(HOST_CA_BUNDLE).await.map_err(|error| {
+        io::Error::new(
+            error.kind(),
+            format!("the host has no CA certificates at {HOST_CA_BUNDLE} ({error}); install ca-certificates"),
+        )
+    })
+}
+
 /// The tools drive is rebuilt whenever what goes into it changes.
-async fn tools_stamp(guest_dir: &Path, files: &[PathBuf]) -> io::Result<String> {
-    let mut stamp = format!("mise {MISE_VERSION}\n");
+async fn tools_stamp(guest_dir: &Path, files: &[PathBuf], ca_bundle: &str) -> io::Result<String> {
+    let mut stamp = format!("mise {MISE_VERSION}\n{ca_bundle}");
     for name in files {
         stamp.push_str(&format!("{}\n", name.display()));
         stamp.push_str(&fs::read_to_string(guest_dir.join(name)).await?);
@@ -183,6 +197,7 @@ async fn build_tools_drive(
     dir: &Path,
     guest_dir: &Path,
     files: &[PathBuf],
+    ca_bundle: &str,
     mise: &Path,
     drive: &Path,
 ) -> io::Result<()> {
@@ -194,6 +209,7 @@ async fn build_tools_drive(
     for name in files {
         fs::copy(guest_dir.join(name), staging.join(name)).await?;
     }
+    fs::write(staging.join(CA_BUNDLE), ca_bundle).await?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -248,11 +264,12 @@ pub async fn ensure(
     }
 
     let files = tool_files(guest_dir).await?;
-    let stamp = tools_stamp(guest_dir, &files).await?;
+    let ca_bundle = host_ca_bundle().await?;
+    let stamp = tools_stamp(guest_dir, &files, &ca_bundle).await?;
     let stamp_file = dir.join("tools.stamp");
     if !assets.tools.exists() || fs::read_to_string(&stamp_file).await.ok().as_ref() != Some(&stamp)
     {
-        build_tools_drive(dir, guest_dir, &files, &mise, &assets.tools).await?;
+        build_tools_drive(dir, guest_dir, &files, &ca_bundle, &mise, &assets.tools).await?;
         fs::write(&stamp_file, &stamp).await?;
     }
     Ok(assets)

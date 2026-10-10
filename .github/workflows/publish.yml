@@ -170,7 +170,7 @@ jobs:
           Priority: optional
           Architecture: amd64
           Maintainer: craftlions <alexander@craftlions.com>
-          Depends: systemd, curl, e2fsprogs
+          Depends: systemd, curl, e2fsprogs, ca-certificates
           Description: craftlions Factory
           CONTROL
 
