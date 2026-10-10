@@ -9,7 +9,8 @@
 //! harness brings its own [`super::TranscriptReader`].
 
 use super::{
-    Block, BlockKind, ChatEvent, ChatItem, Command, LaunchSpec, Process, Resume, Update, clip,
+    Block, BlockKind, ChatEvent, ChatItem, Command, LaunchSpec, Process, Resume, Trace, Update,
+    clip,
 };
 use serde_json::{Value, json};
 use std::{
@@ -82,10 +83,32 @@ struct Connection {
     lines: mpsc::UnboundedSender<String>,
     next_id: AtomicU64,
     pending: Mutex<HashMap<u64, oneshot::Sender<Reply>>>,
+    trace: Trace,
+}
+
+/// One line about a message for the trace: its method and id, never its
+/// content. Streaming updates are left out.
+fn describe(message: &Value) -> Option<String> {
+    let id = match &message["id"] {
+        Value::Null => String::new(),
+        id => format!(" #{id}"),
+    };
+    match (message["method"].as_str(), message.get("error")) {
+        (Some("session/update"), _) => None,
+        (Some(method), _) => Some(format!("{method}{id}")),
+        (None, Some(error)) => Some(format!(
+            "error{id}: {}",
+            error["message"].as_str().unwrap_or("unknown error")
+        )),
+        (None, None) => Some(format!("answer{id}")),
+    }
 }
 
 impl Connection {
     fn send(&self, message: Value) -> bool {
+        if let Some(line) = describe(&message) {
+            (self.trace)(&format!("→ {line}"));
+        }
         self.lines.send(message.to_string()).is_ok()
     }
 
@@ -148,13 +171,20 @@ impl Connection {
 fn connect(
     mut stdin: Box<dyn AsyncWrite + Send + Unpin>,
     stdout: Box<dyn AsyncRead + Send + Unpin>,
+    trace: Trace,
     mut incoming: impl FnMut(&Connection, Incoming) + Send + 'static,
 ) -> (Arc<Connection>, JoinHandle<()>) {
     let (lines, mut line_rx) = mpsc::unbounded_channel::<String>();
+    let writer_trace = trace.clone();
     tokio::spawn(async move {
         while let Some(line) = line_rx.recv().await {
-            // Dropping stdin sends EOF.
-            if line.is_empty() || write_line(&mut stdin, &line).await.is_err() {
+            if line.is_empty() {
+                // Dropping stdin sends EOF.
+                writer_trace("closing the agent's stdin");
+                break;
+            }
+            if let Err(error) = write_line(&mut stdin, &line).await {
+                writer_trace(&format!("writing to the agent failed: {error}"));
                 break;
             }
         }
@@ -164,14 +194,20 @@ fn connect(
         lines,
         next_id: AtomicU64::new(0),
         pending: Mutex::new(HashMap::new()),
+        trace: trace.clone(),
     });
     let reader_connection = connection.clone();
     let reader = tokio::spawn(async move {
         let mut lines = BufReader::new(stdout).lines();
         while let Ok(Some(line)) = lines.next_line().await {
             let Ok(message) = serde_json::from_str::<Value>(&line) else {
+                let shown: String = line.chars().take(200).collect();
+                trace(&format!("← not a protocol message: {shown}"));
                 continue;
             };
+            if let Some(line) = describe(&message) {
+                trace(&format!("← {line}"));
+            }
             let method = message["method"].as_str().map(str::to_owned);
             match (message.get("id"), method) {
                 (Some(id), Some(method)) => incoming(
@@ -193,6 +229,7 @@ fn connect(
                 (None, None) => {}
             }
         }
+        trace("the agent's stdout closed");
         // Waiting requests fail once their answers are dropped.
         reader_connection
             .pending
@@ -745,53 +782,61 @@ pub fn attach(
         stdout,
         stop,
         exited,
+        trace,
     } = process;
     let turn = Arc::new(Mutex::new(Turn::default()));
 
     let incoming_turn = turn.clone();
     let incoming_updates = updates.clone();
-    let (connection, reader) = connect(stdin, stdout, move |connection: &Connection, message| {
-        let mut out = Vec::new();
-        match message {
-            Incoming::Notification { method, params } if method == "session/update" => {
-                incoming_turn
-                    .lock()
-                    .expect("turn lock")
-                    .update(&params["update"], &mut out);
-            }
-            Incoming::Notification { .. } => {}
-            Incoming::Request { id, method, params } if method == "session/request_permission" => {
-                let call = &params["toolCall"];
-                incoming_turn
-                    .lock()
-                    .expect("turn lock")
-                    .tool_update(call, true, &mut out);
-                match grant(&params["options"]) {
-                    Some(granted) => connection.reply(&id, granted),
-                    None => {
-                        connection.reply(&id, json!({"outcome": {"outcome": "cancelled"}}));
-                        out.push(ChatEvent::Notice {
+    let (connection, reader) = connect(
+        stdin,
+        stdout,
+        trace,
+        move |connection: &Connection, message| {
+            let mut out = Vec::new();
+            match message {
+                Incoming::Notification { method, params } if method == "session/update" => {
+                    incoming_turn
+                        .lock()
+                        .expect("turn lock")
+                        .update(&params["update"], &mut out);
+                }
+                Incoming::Notification { .. } => {}
+                Incoming::Request { id, method, params }
+                    if method == "session/request_permission" =>
+                {
+                    let call = &params["toolCall"];
+                    incoming_turn
+                        .lock()
+                        .expect("turn lock")
+                        .tool_update(call, true, &mut out);
+                    match grant(&params["options"]) {
+                        Some(granted) => connection.reply(&id, granted),
+                        None => {
+                            connection.reply(&id, json!({"outcome": {"outcome": "cancelled"}}));
+                            out.push(ChatEvent::Notice {
                             text: format!(
                                 "{} asked to use {} without a way to allow it, so it was declined.",
                                 profile.name,
                                 tool_name(call)
                             ),
                         });
+                        }
                     }
                 }
-            }
-            Incoming::Request { id, method, .. } => {
-                connection.refuse(&id, "the factory does not offer this");
-                out.push(ChatEvent::Notice {
+                Incoming::Request { id, method, .. } => {
+                    connection.refuse(&id, "the factory does not offer this");
+                    out.push(ChatEvent::Notice {
                     text: format!(
                         "{} asked for {method}, which the chat cannot answer, so it was declined.",
                         profile.name
                     ),
                 });
+                }
             }
-        }
-        emit(&incoming_updates, out);
-    });
+            emit(&incoming_updates, out);
+        },
+    );
 
     let start = Start {
         state_dir: spec.state_dir.to_owned(),

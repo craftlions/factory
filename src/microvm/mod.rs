@@ -278,7 +278,7 @@ impl Microvm {
             allow: AllowList::new(hosts),
             egress: request.egress.clone(),
         });
-        // Refusals go to the chat and into the log.
+        // Refusals go to the chat and into the log, the rest only into the log.
         let (proxy_notices, mut refused) = mpsc::unbounded_channel::<String>();
         let (chat, proxy_log) = (request.notices.clone(), log.clone());
         tokio::spawn(async move {
@@ -287,9 +287,21 @@ impl Microvm {
                 let _ = chat.send(notice);
             }
         });
+        let (proxy_trace, mut traced) = mpsc::unbounded_channel::<String>();
+        let trace_log = log.clone();
+        tokio::spawn(async move {
+            while let Some(line) = traced.recv().await {
+                trace_log.write("proxy", &line);
+            }
+        });
         let proxy_task = tokio::spawn(async move {
             while let Ok((stream, _)) = proxy_listener.accept().await {
-                tokio::spawn(proxy::serve(stream, policy.clone(), proxy_notices.clone()));
+                tokio::spawn(proxy::serve(
+                    stream,
+                    policy.clone(),
+                    proxy_notices.clone(),
+                    proxy_trace.clone(),
+                ));
             }
         });
         let proxy_guard = AbortOnDrop(proxy_task);
@@ -343,6 +355,7 @@ impl Microvm {
                 _ => {}
             }
         }
+        let trace_log = log.clone();
         let (stdio, _) = timeout(BOOT_TIMEOUT, stdio_listener.accept())
             .await
             .map_err(|_| io::Error::other("the guest did not connect the harness"))??;
@@ -367,6 +380,7 @@ impl Microvm {
             stdout: Box::new(stdout),
             stop,
             exited,
+            trace: Arc::new(move |line: &str| trace_log.write("stdio", line)),
         })
     }
 

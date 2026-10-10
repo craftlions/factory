@@ -180,7 +180,12 @@ pub struct Process {
     pub stop: oneshot::Sender<()>,
     /// Resolves once the process is gone, with the reason if it failed.
     pub exited: oneshot::Receiver<Option<String>>,
+    /// Records what an adapter says to the process and hears back, for
+    /// whoever looks into a session.
+    pub trace: Trace,
 }
+
+pub type Trace = std::sync::Arc<dyn Fn(&str) + Send + Sync>;
 
 #[derive(Clone, Debug, Serialize)]
 pub struct ModelInfo {

@@ -356,6 +356,7 @@ impl Harness for Pi {
             stdout,
             stop,
             exited,
+            ..
         } = process;
         let (line_tx, mut line_rx) = mpsc::unbounded_channel::<String>();
         let working = Arc::new(AtomicBool::new(false));

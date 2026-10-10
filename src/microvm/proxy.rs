@@ -172,11 +172,13 @@ async fn refuse(client: &mut (impl AsyncWrite + Unpin), status: &str) -> io::Res
     client.write_all(response.as_bytes()).await
 }
 
-/// Serves one proxied connection. Refusals are reported through `notices`.
+/// Serves one proxied connection. Refusals are reported through `notices`,
+/// connections let through and how they ended through `trace`.
 pub async fn serve(
     mut client: impl AsyncRead + AsyncWrite + Unpin,
     policy: Arc<Policy>,
     notices: mpsc::UnboundedSender<String>,
+    trace: mpsc::UnboundedSender<String>,
 ) -> io::Result<()> {
     let mut head = Vec::new();
     let mut byte = [0u8; 1];
@@ -222,6 +224,7 @@ pub async fn serve(
             return refuse(&mut client, "502 Bad Gateway").await;
         }
     };
+    let _ = trace.send(format!("connected to {host}:{port}"));
     match forward {
         Some(head) => upstream.write_all(head.as_bytes()).await?,
         None => {
@@ -230,6 +233,12 @@ pub async fn serve(
                 .await?
         }
     }
-    tokio::io::copy_bidirectional(&mut client, &mut upstream).await?;
-    Ok(())
+    let ended = tokio::io::copy_bidirectional(&mut client, &mut upstream).await;
+    let _ = trace.send(match &ended {
+        Ok((sent, received)) => {
+            format!("closed {host}:{port} after {sent} bytes out, {received} in")
+        }
+        Err(error) => format!("closed {host}:{port}: {error}"),
+    });
+    ended.map(|_| ())
 }
