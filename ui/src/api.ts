@@ -91,6 +91,14 @@ export const abortSession = (id: string) => postJson(`/api/sessions/${id}/abort`
 /** Starts the harness again for an ended session, continuing its conversation. */
 export const resumeSession = (id: string) => postJson(`/api/sessions/${id}/resume`, {});
 export const stopSession = (id: string) => postJson(`/api/sessions/${id}/stop`, {});
+/** Removes an ended session with its disk and conversation. */
+export async function deleteSession(id: string): Promise<void> {
+  const url = `/api/sessions/${id}`;
+  const response = await fetch(url, { method: 'DELETE' });
+  if (response.ok) return;
+  const parsed = (await response.json().catch(() => null)) as { error?: string } | null;
+  throw new Error(parsed?.error ?? `${url} responded ${response.status}`);
+}
 
 export interface HarnessModel {
   provider: string;

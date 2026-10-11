@@ -1,11 +1,8 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type KeyboardEvent, type ReactNode } from 'react';
-import { abortSession, formatTime, resumeSession, sendPrompt, stopSession } from '../api';
+import { abortSession, deleteSession, formatTime, resumeSession, sendPrompt, stopSession } from '../api';
 import { ArrowIcon, CheckIcon } from '../icons';
-import { Link } from '../router';
-import { HARNESSES, ISOLATION, type IsolationId } from '../sessionOptions';
-
-/** Sessions created before host execution was removed cannot be restarted. */
-const canRestart = (isolation: string | null) => isolation !== null && isolation !== 'none';
+import { Link, navigate } from '../router';
+import { HARNESSES, ISOLATION, canResume, confirmDelete, type IsolationId } from '../sessionOptions';
 import { useSession, type Block, type ChatItem, type LiveTool, type StreamBlock } from '../useSession';
 
 /** Fenced code blocks and inline code; everything else stays plain text. */
@@ -105,6 +102,7 @@ export function SessionPage({ id }: { id: string }) {
   const [error, setError] = useState<string | null>(null);
   const [stopping, setStopping] = useState(false);
   const [restarting, setRestarting] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
 
@@ -125,7 +123,7 @@ export function SessionPage({ id }: { id: string }) {
     if (el && pinned.current) el.scrollTop = el.scrollHeight;
   }, [items, streaming, tools, working]);
 
-  useEffect(() => { setDraft(''); setError(null); setStopping(false); setRestarting(false); }, [id, epoch]);
+  useEffect(() => { setDraft(''); setError(null); setStopping(false); setRestarting(false); setDeleting(false); }, [id, epoch]);
 
   if (chat.connection === 'unavailable' && !session) {
     return (
@@ -158,6 +156,19 @@ export function SessionPage({ id }: { id: string }) {
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
       setRestarting(false);
+    }
+  }
+
+  async function remove() {
+    if (!session || !confirmDelete(session)) return;
+    setDeleting(true);
+    setError(null);
+    try {
+      await deleteSession(id);
+      navigate('/sessions');
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+      setDeleting(false);
     }
   }
 
@@ -198,9 +209,14 @@ export function SessionPage({ id }: { id: string }) {
             {stopping ? 'Stopping…' : 'Stop session'}
           </button>
         )}
-        {session.status === 'interrupted' && canRestart(session.isolation) && (
-          <button type="button" className="primary" disabled={restarting} onClick={() => void restart()}>
-            {restarting ? 'Restarting…' : 'Restart session'}
+        {!running && (
+          <button type="button" disabled={deleting || restarting} onClick={() => void remove()}>
+            {deleting ? 'Deleting…' : 'Delete'}
+          </button>
+        )}
+        {canResume(session) && (
+          <button type="button" className="primary" disabled={restarting || deleting} onClick={() => void restart()}>
+            {restarting ? 'Resuming…' : 'Resume session'}
           </button>
         )}
       </section>
@@ -257,7 +273,7 @@ export function SessionPage({ id }: { id: string }) {
           This session {session.status === 'failed' ? 'failed' : 'ended'}
           {session.ended_at ? ` on ${formatTime(session.ended_at)}` : ''}.
           {session.note ? ` ${session.note}` : ''} The conversation above is read from the harness’s own session file.
-          {session.status === 'interrupted' && canRestart(session.isolation) && ' Restart it to continue this conversation in the same directory.'}
+          {canResume(session) && ' Resume it to continue this conversation in the same directory.'}
         </p>
       )}
       {error && <p className="msg-error" role="alert">{error}</p>}

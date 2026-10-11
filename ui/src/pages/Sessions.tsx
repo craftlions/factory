@@ -1,24 +1,30 @@
 import { useState } from 'react';
-import { formatDuration, formatTime, resumeSession } from '../api';
+import { deleteSession, formatDuration, formatTime, resumeSession } from '../api';
 import { Link, navigate } from '../router';
+import { canResume, confirmDelete } from '../sessionOptions';
 import type { Dashboard } from '../useDashboard';
 
-export function SessionsPage({ sessions, samples }: Pick<Dashboard, 'sessions' | 'samples'>) {
+export function SessionsPage({ sessions, samples, refresh }: Pick<Dashboard, 'sessions' | 'samples' | 'refresh'>) {
   // The newest sample stands in for "now" so running durations tick with the stream.
   const now = samples.at(-1)?.ts;
-  const [restarting, setRestarting] = useState<string | null>(null);
+  const [busy, setBusy] = useState<{ id: string; action: 'resume' | 'delete' } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  async function restart(id: string) {
-    setRestarting(id);
+  async function act(id: string, action: 'resume' | 'delete') {
+    setBusy({ id, action });
     setError(null);
     try {
-      await resumeSession(id);
-      navigate(`/sessions/${id}`);
+      if (action === 'resume') {
+        await resumeSession(id);
+        navigate(`/sessions/${id}`);
+        return;
+      }
+      await deleteSession(id);
+      refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause));
-      setRestarting(null);
     }
+    setBusy(null);
   }
 
   return (
@@ -46,10 +52,16 @@ export function SessionsPage({ sessions, samples }: Pick<Dashboard, 'sessions' |
                     <td>{formatTime(s.started_at)}</td>
                     <td>{formatDuration(Math.max(0, end - s.started_at))}</td>
                     <td className="note">{s.note ?? ''}</td>
-                    <td>
-                      {s.status === 'interrupted' && s.isolation !== null && s.isolation !== 'none' && (
-                        <button type="button" className="ghost" disabled={restarting !== null} onClick={() => void restart(s.id)}>
-                          {restarting === s.id ? 'Restarting…' : 'Restart'}
+                    <td className="row-actions">
+                      {canResume(s) && (
+                        <button type="button" className="ghost" disabled={busy !== null} onClick={() => void act(s.id, 'resume')}>
+                          {busy?.id === s.id && busy.action === 'resume' ? 'Resuming…' : 'Resume'}
+                        </button>
+                      )}
+                      {s.status !== 'running' && (
+                        <button type="button" className="ghost danger" disabled={busy !== null}
+                          onClick={() => { if (confirmDelete(s)) void act(s.id, 'delete'); }}>
+                          {busy?.id === s.id && busy.action === 'delete' ? 'Deleting…' : 'Delete'}
                         </button>
                       )}
                     </td>

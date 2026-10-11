@@ -1,3 +1,5 @@
+import type { Session } from './api';
+
 // Catalog behind the new-session questionnaire. Nothing here talks to the
 // server yet; edit these tables to change what the questionnaire offers.
 
@@ -147,6 +149,22 @@ export const EMPTY_DRAFT: SessionDraft = {
   reasoning: DEFAULT_REASONING,
   network: { access: 'restricted', ports: [443, 80], allPorts: false, extra: '' },
 };
+
+/**
+ * Whether an ended session can be started again. Sessions from before host
+ * execution was removed, or from before sessions recorded their configuration,
+ * cannot, and neither can those of a harness that is disabled for now.
+ */
+export function canResume(session: Session): boolean {
+  return session.status !== 'running'
+    && session.isolation !== null && session.isolation !== 'none'
+    && session.model !== null
+    && HARNESSES.some((h) => h.id === session.kind);
+}
+
+/** Asks first: the disk and the conversation go with the session. */
+export const confirmDelete = (session: Session) =>
+  window.confirm(`Delete session ${session.id}? Its disk, logs and conversation are removed for good.`);
 
 export function providerName(id: string): string {
   return PROVIDERS[id]?.name ?? id;

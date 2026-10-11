@@ -285,6 +285,8 @@ button.ghost {
   color: var(--accent);
   font-size: 0.85rem;
 }
+button.ghost.danger { color: var(--bad); }
+.row-actions { white-space: nowrap; text-align: right; }
 
 @keyframes rise {
   from { opacity: 0; transform: translateY(10px); }

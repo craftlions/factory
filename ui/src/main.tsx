@@ -19,7 +19,7 @@ const CONNECTION_LABEL: Record<Connection, string> = {
 
 const PAGES: { path: string; title: string; hidden?: boolean; render: (dashboard: Dashboard) => ReactNode }[] = [
   { path: '/', title: 'Overview', render: (d) => <OverviewPage overview={d.overview} /> },
-  { path: '/sessions', title: 'Sessions', render: (d) => <SessionsPage sessions={d.sessions} samples={d.samples} /> },
+  { path: '/sessions', title: 'Sessions', render: (d) => <SessionsPage sessions={d.sessions} samples={d.samples} refresh={d.refresh} /> },
   { path: '/sessions/new', title: 'New session', hidden: true, render: () => <NewSessionPage /> },
   { path: '/host', title: 'Host', render: (d) => <HostPage overview={d.overview} samples={d.samples} /> },
   { path: '/settings', title: 'Settings', render: () => <SettingsPage /> },
