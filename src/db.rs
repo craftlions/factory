@@ -196,6 +196,15 @@ pub async fn reopen_session(pool: &SqlitePool, id: &str) -> sqlx::Result<bool> {
     Ok(result.rows_affected() == 1)
 }
 
+/// Deletes an ended session's row. `false` means it is running or gone.
+pub async fn delete_session(pool: &SqlitePool, id: &str) -> sqlx::Result<bool> {
+    let result = sqlx::query("DELETE FROM sessions WHERE id = ? AND status != 'running'")
+        .bind(id)
+        .execute(pool)
+        .await?;
+    Ok(result.rows_affected() == 1)
+}
+
 pub async fn session(pool: &SqlitePool, id: &str) -> sqlx::Result<Option<Session>> {
     sqlx::query_as("SELECT * FROM sessions WHERE id = ?")
         .bind(id)

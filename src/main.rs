@@ -11,7 +11,7 @@ mod sessions;
 use db::Sample;
 use futures_lite::StreamExt;
 use serde::Serialize;
-use sessions::{CreateError, ResumeError, Sessions, Snapshot};
+use sessions::{CreateError, DeleteError, ResumeError, Sessions, Snapshot};
 use sqlx::SqlitePool;
 use std::{env, path::PathBuf, pin::Pin, sync::Arc, time::Duration};
 use sysinfo::System;
@@ -170,6 +170,21 @@ async fn api(mut conn: Conn, app: Arc<App>) -> Conn {
                 }
             }
             ["settings", "credentials", _] => error(conn, 404, "no such harness").halt(),
+            ["sessions", id] => {
+                let deleted = match ids::is_valid(id) {
+                    true => app.sessions.delete(id).await,
+                    false => Err(DeleteError::NotFound),
+                };
+                match deleted {
+                    Ok(()) => conn.with_status(204).halt(),
+                    Err(DeleteError::NotFound) => error(conn, 404, "no such session").halt(),
+                    Err(DeleteError::Running) => {
+                        error(conn, 409, "stop the session before deleting it").halt()
+                    }
+                    Err(DeleteError::Io(cause)) => error(conn, 500, cause).halt(),
+                    Err(DeleteError::Database(cause)) => db_error(conn, cause).halt(),
+                }
+            }
             _ => conn
                 .with_response_header("allow", "GET, HEAD, POST")
                 .with_status(405)

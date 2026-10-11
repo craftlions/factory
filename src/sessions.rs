@@ -102,6 +102,13 @@ pub enum ResumeError {
     Database(sqlx::Error),
 }
 
+pub enum DeleteError {
+    NotFound,
+    Running,
+    Io(io::Error),
+    Database(sqlx::Error),
+}
+
 /// Everything a chat client needs to draw the conversation from scratch.
 #[derive(Debug, Serialize)]
 pub struct Snapshot {
@@ -612,6 +619,28 @@ impl Sessions {
         };
         self.attach(id, launch, items);
         Ok(())
+    }
+
+    /// Removes an ended session for good: its row, its disk, its logs and the
+    /// conversation copied out of it.
+    pub async fn delete(&self, id: &str) -> Result<(), DeleteError> {
+        db::session(&self.pool, id)
+            .await
+            .map_err(DeleteError::Database)?
+            .ok_or(DeleteError::NotFound)?;
+        // A session stays live until its conversation has been copied out,
+        // even after its row says it ended.
+        if self.get(id).is_some()
+            || !db::delete_session(&self.pool, id)
+                .await
+                .map_err(DeleteError::Database)?
+        {
+            return Err(DeleteError::Running);
+        }
+        match tokio::fs::remove_dir_all(self.dir(id)).await {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(DeleteError::Io(error)),
+            _ => Ok(()),
+        }
     }
 
     /// An ended session's conversation, from the harness's own session file.
