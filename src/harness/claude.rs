@@ -25,7 +25,15 @@ static PROFILE: acp::Profile = acp::Profile {
     // one by one instead.
     unattended_mode: Some("bypassPermissions"),
     session_file,
+    session_meta,
 };
+
+/// Recent models leave their thinking out of the answer unless asked, so a
+/// long think would look like a stall. These settings take precedence over
+/// any settings file.
+fn session_meta() -> Value {
+    serde_json::json!({"claudeCode": {"options": {"settings": {"showThinkingSummaries": true}}}})
+}
 
 /// Claude Code names a project's directory after its path, with everything
 /// but letters and digits replaced by `-`.

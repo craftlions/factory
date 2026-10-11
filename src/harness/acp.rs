@@ -44,6 +44,8 @@ pub struct Profile {
     /// The agent's transcript of a session inside the guest, from the state
     /// directory, the working directory and the session id.
     pub session_file: fn(&str, &str, &str) -> Option<String>,
+    /// Agent-specific `_meta` for opening a session, or null.
+    pub session_meta: fn() -> Value,
 }
 
 fn now() -> i64 {
@@ -605,7 +607,8 @@ async fn open_session(
         .await?;
     let steering = initialized["_meta"]["steering"]["supported"] == true;
     let name = profile.name;
-    let fresh = json!({"cwd": start.cwd, "mcpServers": []});
+    let meta = (profile.session_meta)();
+    let fresh = json!({"cwd": start.cwd, "mcpServers": [], "_meta": meta});
 
     let previous = match &start.resume {
         None => None,
@@ -622,7 +625,7 @@ async fn open_session(
     };
     let mut opened = None;
     if let Some(id) = previous {
-        let params = json!({"sessionId": id, "cwd": start.cwd, "mcpServers": []});
+        let params = json!({"sessionId": id, "cwd": start.cwd, "mcpServers": [], "_meta": meta});
         match connection.request("session/resume", params).await {
             Ok(resumed) => opened = Some((id, resumed["configOptions"].clone())),
             Err(error) => out.push(ChatEvent::Notice {
